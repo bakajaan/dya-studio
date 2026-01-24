@@ -29,11 +29,9 @@ export function AppLayout({
         {/* Logo & Brand */}
         <div className="flex items-center gap-4">
           <DyaLogo className="w-8 h-8 [&_polygon]:fill-[var(--color-text)]" />
-          <div className="flex items-center gap-2">
-            <span className="text-lg font-light tracking-widest text-[var(--color-text)]">
-              DYA
-            </span>
-            <span className="text-xs font-light tracking-wider text-[var(--color-text-muted)] uppercase">
+          <div className="flex items-baseline gap-2 font-dya-logo pt-1">
+            <span className="text-xl text-[var(--color-text)]">DYA</span>
+            <span className="text-lg text-[var(--color-text-muted)] uppercase">
               Studio
             </span>
           </div>

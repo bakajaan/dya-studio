@@ -60,6 +60,7 @@ export default {
         },
       },
       fontFamily: {
+        // sans: ["Mohave", "system-ui", "-apple-system", "sans-serif"],
         sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
         mono: ["JetBrains Mono", "Fira Code", "monospace"],
       },
