@@ -1,4 +1,4 @@
-import { useState, useContext } from "react";
+import { useState, useContext, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   IconBattery2,
@@ -15,7 +15,9 @@ import {
   DeviceConnectionProvider,
   ConnectionContext,
 } from "./components/DeviceConnection";
+import { ConsoleContext } from "./contexts/ConsoleContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { ConsoleProvider } from "./contexts/ConsoleContext";
 import { TabNavigation } from "./components/TabNavigation";
 import type { TabItem } from "./components/TabNavigation";
 import { AppLayout } from "./layouts/AppLayout";
@@ -75,16 +77,34 @@ const tabs: TabItem[] = [
 function App() {
   return (
     <ThemeProvider>
-      <DeviceConnectionProvider>
-        <AppContent />
-      </DeviceConnectionProvider>
+      <ConsoleProvider>
+        <DeviceConnectionProvider>
+          <AppContent />
+        </DeviceConnectionProvider>
+      </ConsoleProvider>
     </ThemeProvider>
   );
 }
 
 function AppContent() {
   const connection = useContext(ConnectionContext);
+  const consoleContext = useContext(ConsoleContext);
   const [activeTab, setActiveTab] = useState("battery");
+
+  const handleTabChange = useCallback(
+    (tabId: string) => {
+      // Handle console tab transitions
+      if (activeTab === "console" && tabId !== "console") {
+        // Leaving console tab - convert to window mode
+        consoleContext?.exitToWindowMode();
+      } else if (activeTab !== "console" && tabId === "console") {
+        // Entering console tab - restore snap state
+        consoleContext?.restoreSnapState();
+      }
+      setActiveTab(tabId);
+    },
+    [activeTab, consoleContext],
+  );
 
   return (
     <>
@@ -122,7 +142,7 @@ function AppContent() {
             <TabNavigation
               tabs={tabs}
               activeTab={activeTab}
-              onTabChange={setActiveTab}
+              onTabChange={handleTabChange}
             />
           </AppLayout>
         </motion.div>

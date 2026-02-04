@@ -1,70 +1,45 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useContext, useEffect } from "react";
 import { IconTerminal2, IconPlus } from "@tabler/icons-react";
 import { SerialConsole } from "../components/SerialConsole";
 import { DraggableWindow } from "../components/DraggableWindow";
+import { ConsoleContext } from "../contexts/ConsoleContext";
 import type { WindowPosition } from "../components/DraggableWindow";
-
-interface ConsoleWindow {
-  id: string;
-  position: WindowPosition;
-  zIndex: number;
-  snapPosition?: "left" | "right" | "top" | "bottom" | null;
-}
 
 type SnapPosition = "left" | "right" | "top" | "bottom" | null;
 
 export function ConsolePage() {
-  const [consoles, setConsoles] = useState<ConsoleWindow[]>([]);
-  const [maxZIndex, setMaxZIndex] = useState(1000);
+  const consoleContext = useContext(ConsoleContext);
+  if (!consoleContext) {
+    throw new Error("ConsolePage must be used within ConsoleProvider");
+  }
+
+  const {
+    consoles,
+    addConsole,
+    removeConsole,
+    updateConsole,
+    bringToFront,
+    snapConsole: contextSnapConsole,
+    snapOut,
+  } = consoleContext;
+
   const [draggedConsoleId, setDraggedConsoleId] = useState<string | null>(null);
   const [snapPreview, setSnapPreview] = useState<SnapPosition>(null);
-  const nextIdRef = useRef(1);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const addConsole = useCallback(() => {
-    const id = `console-${nextIdRef.current++}`;
-    const newConsole: ConsoleWindow = {
-      id,
-      position: {
-        x: 100 + ((consoles.length * 30) % 200),
-        y: 100 + ((consoles.length * 30) % 200),
-        width: 600,
-        height: 400,
-      },
-      zIndex: maxZIndex + 1,
-      snapPosition: null,
-    };
-    setConsoles((prev) => [...prev, newConsole]);
-    setMaxZIndex((prev) => prev + 1);
-  }, [consoles.length, maxZIndex]);
-
-  const removeConsole = useCallback((id: string) => {
-    setConsoles((prev) => prev.filter((c) => c.id !== id));
-  }, []);
-
-  const bringToFront = useCallback(
-    (id: string) => {
-      setConsoles((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, zIndex: maxZIndex + 1 } : c)),
-      );
-      setMaxZIndex((prev) => prev + 1);
+  const updatePosition = useCallback(
+    (id: string, position: WindowPosition) => {
+      updateConsole(id, { position });
     },
-    [maxZIndex],
+    [updateConsole],
   );
 
-  const updatePosition = useCallback((id: string, position: WindowPosition) => {
-    setConsoles((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, position } : c)),
-    );
-  }, []);
+  const snapConsoleToPosition = useCallback(
+    (id: string, snapPos: SnapPosition) => {
+      if (!snapPos || !containerRef.current) return;
 
-  const snapConsole = useCallback((id: string, snapPos: SnapPosition) => {
-    if (!snapPos || !containerRef.current) return;
-
-    const rect = containerRef.current.getBoundingClientRect();
-
-    setConsoles((prev) => {
-      const consolesToSnap = prev.filter(
+      const rect = containerRef.current.getBoundingClientRect();
+      const consolesToSnap = consoles.filter(
         (c) => c.snapPosition === snapPos || c.id === id,
       );
       const othersSnapped = consolesToSnap.filter((c) => c.id !== id);
@@ -98,54 +73,45 @@ export function ConsolePage() {
         };
       }
 
-      // Update positions of all consoles in this snap area
-      const updated = prev.map((c) => {
-        if (c.id === id) {
-          return { ...c, position: newPosition, snapPosition: snapPos };
-        }
-        if (c.snapPosition === snapPos) {
-          // Recalculate positions for existing snapped consoles
-          const consoleIndex = othersSnapped.findIndex((oc) => oc.id === c.id);
-          if (consoleIndex >= 0) {
-            if (snapPos === "left" || snapPos === "right") {
-              const width = rect.width / 2 / totalInSnap;
-              const height = rect.height;
-              return {
-                ...c,
-                position: {
-                  x:
-                    snapPos === "left"
-                      ? consoleIndex * width
-                      : rect.width / 2 + consoleIndex * width,
-                  y: 0,
-                  width,
-                  height,
-                },
-              };
-            } else {
-              const width = rect.width;
-              const height = rect.height / 2 / totalInSnap;
-              return {
-                ...c,
-                position: {
-                  x: 0,
-                  y:
-                    snapPos === "top"
-                      ? consoleIndex * height
-                      : rect.height / 2 + consoleIndex * height,
-                  width,
-                  height,
-                },
-              };
-            }
-          }
-        }
-        return c;
-      });
+      // Update this console
+      updateConsole(id, { position: newPosition, snapPosition: snapPos });
+      contextSnapConsole(id, snapPos);
 
-      return updated;
-    });
-  }, []);
+      // Recalculate positions for existing snapped consoles
+      othersSnapped.forEach((c, consoleIndex) => {
+        if (snapPos === "left" || snapPos === "right") {
+          const width = rect.width / 2 / totalInSnap;
+          const height = rect.height;
+          updateConsole(c.id, {
+            position: {
+              x:
+                snapPos === "left"
+                  ? consoleIndex * width
+                  : rect.width / 2 + consoleIndex * width,
+              y: 0,
+              width,
+              height,
+            },
+          });
+        } else {
+          const width = rect.width;
+          const height = rect.height / 2 / totalInSnap;
+          updateConsole(c.id, {
+            position: {
+              x: 0,
+              y:
+                snapPos === "top"
+                  ? consoleIndex * height
+                  : rect.height / 2 + consoleIndex * height,
+              width,
+              height,
+            },
+          });
+        }
+      });
+    },
+    [consoles, updateConsole, contextSnapConsole],
+  );
 
   const handleDragEnd = useCallback(
     (id: string, position: WindowPosition) => {
@@ -168,85 +134,65 @@ export function ConsolePage() {
       }
 
       if (snapPos) {
-        snapConsole(id, snapPos);
+        snapConsoleToPosition(id, snapPos);
       }
 
       setDraggedConsoleId(null);
       setSnapPreview(null);
     },
-    [snapConsole],
+    [snapConsoleToPosition],
   );
 
-  const snapOut = useCallback((id: string) => {
-    setConsoles((prev) => {
-      const console = prev.find((c) => c.id === id);
-      if (!console || !console.snapPosition) return prev;
+  const handleSnapOut = useCallback(
+    (id: string) => {
+      snapOut(id);
+
+      // Recalculate positions for remaining consoles in the same snap area
+      const console = consoles.find((c) => c.id === id);
+      if (!console || !console.snapPosition || !containerRef.current) return;
 
       const snapPos = console.snapPosition;
-
-      // Move to center with default size
-      const newPosition: WindowPosition = {
-        x: 100,
-        y: 100,
-        width: 600,
-        height: 400,
-      };
-
-      const updated = prev.map((c) =>
-        c.id === id ? { ...c, position: newPosition, snapPosition: null } : c,
+      const rect = containerRef.current.getBoundingClientRect();
+      const remaining = consoles.filter(
+        (c) => c.snapPosition === snapPos && c.id !== id,
       );
 
-      // Recalculate positions for remaining consoles in the snap area
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        const remaining = updated.filter((c) => c.snapPosition === snapPos);
-
-        if (remaining.length > 0) {
-          return updated.map((c) => {
-            if (c.snapPosition === snapPos) {
-              const index = remaining.findIndex((rc) => rc.id === c.id);
-              if (index >= 0) {
-                if (snapPos === "left" || snapPos === "right") {
-                  const width = rect.width / 2 / remaining.length;
-                  const height = rect.height;
-                  return {
-                    ...c,
-                    position: {
-                      x:
-                        snapPos === "left"
-                          ? index * width
-                          : rect.width / 2 + index * width,
-                      y: 0,
-                      width,
-                      height,
-                    },
-                  };
-                } else {
-                  const width = rect.width;
-                  const height = rect.height / 2 / remaining.length;
-                  return {
-                    ...c,
-                    position: {
-                      x: 0,
-                      y:
-                        snapPos === "top"
-                          ? index * height
-                          : rect.height / 2 + index * height,
-                      width,
-                      height,
-                    },
-                  };
-                }
-              }
-            }
-            return c;
-          });
-        }
+      if (remaining.length > 0) {
+        remaining.forEach((c, index) => {
+          if (snapPos === "left" || snapPos === "right") {
+            const width = rect.width / 2 / remaining.length;
+            const height = rect.height;
+            updateConsole(c.id, {
+              position: {
+                x:
+                  snapPos === "left"
+                    ? index * width
+                    : rect.width / 2 + index * width,
+                y: 0,
+                width,
+                height,
+              },
+            });
+          } else {
+            const width = rect.width;
+            const height = rect.height / 2 / remaining.length;
+            updateConsole(c.id, {
+              position: {
+                x: 0,
+                y:
+                  snapPos === "top"
+                    ? index * height
+                    : rect.height / 2 + index * height,
+                width,
+                height,
+              },
+            });
+          }
+        });
       }
-
-      return updated;
-    });
-  }, []);
+    },
+    [snapOut, consoles, updateConsole],
+  );
 
   const handleDragStart = useCallback((id: string) => {
     setDraggedConsoleId(id);
@@ -276,6 +222,69 @@ export function ConsolePage() {
     },
     [updatePosition],
   );
+
+  // Recalculate snap positions on resize
+  useEffect(() => {
+    const handleResize = () => {
+      if (!containerRef.current) return;
+
+      const rect = containerRef.current.getBoundingClientRect();
+
+      // Group consoles by snap position
+      const snapGroups: Record<string, typeof consoles> = {
+        left: [],
+        right: [],
+        top: [],
+        bottom: [],
+      };
+
+      consoles.forEach((console) => {
+        if (console.snapPosition) {
+          snapGroups[console.snapPosition].push(console);
+        }
+      });
+
+      // Recalculate positions for each snap group
+      Object.entries(snapGroups).forEach(([snapPos, group]) => {
+        if (group.length === 0) return;
+
+        group.forEach((c, index) => {
+          if (snapPos === "left" || snapPos === "right") {
+            const width = rect.width / 2 / group.length;
+            const height = rect.height;
+            updateConsole(c.id, {
+              position: {
+                x:
+                  snapPos === "left"
+                    ? index * width
+                    : rect.width / 2 + index * width,
+                y: 0,
+                width,
+                height,
+              },
+            });
+          } else {
+            const width = rect.width;
+            const height = rect.height / 2 / group.length;
+            updateConsole(c.id, {
+              position: {
+                x: 0,
+                y:
+                  snapPos === "top"
+                    ? index * height
+                    : rect.height / 2 + index * height,
+                width,
+                height,
+              },
+            });
+          }
+        });
+      });
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [consoles, updateConsole]);
 
   const snappedConsoles = consoles.filter((c) => c.snapPosition !== null);
   const floatingConsoles = consoles.filter((c) => c.snapPosition === null);
@@ -348,7 +357,7 @@ export function ConsolePage() {
                 consoleId={console.id}
                 onClose={() => removeConsole(console.id)}
                 isSnapped={true}
-                onSnapOut={() => snapOut(console.id)}
+                onSnapOut={() => handleSnapOut(console.id)}
               />
             </div>
           ))}
