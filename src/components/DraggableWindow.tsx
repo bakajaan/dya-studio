@@ -110,6 +110,7 @@ export function DraggableWindow({
           }
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
+          aria-describedby="window-content"
         >
           {/* Window Header */}
           <div
@@ -142,7 +143,7 @@ export function DraggableWindow({
           </div>
 
           {/* Window Content */}
-          <div className="flex-1 overflow-auto">{children}</div>
+          <div id="window-content" className="flex-1 overflow-auto">{children}</div>
 
           {/* Resize Handle */}
           {!isMaximized && (
