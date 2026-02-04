@@ -116,7 +116,11 @@ export async function tryZMKConnection(
       if (port) {
         resolve({ success: false, port });
       } else {
-        resolve({ success: false, port: null as unknown as SerialPort });
+        // No port available - connection was already closed
+        resolve({
+          success: false,
+          port: undefined as unknown as SerialPort,
+        });
       }
     };
 

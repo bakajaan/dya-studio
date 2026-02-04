@@ -118,7 +118,7 @@ export function SerialConsole({
         <div className="flex items-center gap-2">
           <IconTerminal size={16} className="text-[var(--color-electric)]" />
           <span className="text-sm font-medium text-[var(--color-text)]">
-            Console {consoleId}
+            Serial Console {consoleId.replace(/^console-/, "#")}
           </span>
           {isConnected && (
             <div className="w-2 h-2 rounded-full bg-[var(--color-neon)] animate-pulse" />
