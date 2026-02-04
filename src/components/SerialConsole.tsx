@@ -15,6 +15,7 @@ interface SerialConsoleProps {
   onClose?: () => void;
   isSnapped?: boolean;
   onSnapOut?: () => void;
+  existingPort?: SerialPort;
 }
 
 export function SerialConsole({
@@ -22,19 +23,21 @@ export function SerialConsole({
   onClose,
   isSnapped = false,
   onSnapOut,
+  existingPort,
 }: SerialConsoleProps) {
   const {
     isConnected,
     isConnecting,
     error,
     connect,
+    connectWithPort,
     disconnect,
     sendData,
     receivedData,
     clearData,
   } = useSerialPort();
 
-  const [showConfig, setShowConfig] = useState(!isConnected);
+  const [showConfig, setShowConfig] = useState(!isConnected && !existingPort);
   const [baudRate, setBaudRate] = useState("115200");
   const [inputText, setInputText] = useState("");
   const [filterRegex, setFilterRegex] = useState("");
@@ -43,6 +46,13 @@ export function SerialConsole({
   const [showFilters, setShowFilters] = useState(false);
 
   const terminalRef = useRef<HTMLDivElement>(null);
+
+  // Auto-connect if we have an existing port
+  useEffect(() => {
+    if (existingPort && !isConnected) {
+      connectWithPort(existingPort, { baudRate: parseInt(baudRate, 10) });
+    }
+  }, [existingPort, isConnected, connectWithPort, baudRate]);
 
   // Auto-scroll to bottom when new data arrives
   useEffect(() => {

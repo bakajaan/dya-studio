@@ -28,6 +28,8 @@ import { KeymapPage } from "./pages/KeymapPage";
 import { TrackballPage } from "./pages/TrackballPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ConsolePage } from "./pages/ConsolePage";
+import { DraggableWindow } from "./components/DraggableWindow";
+import { SerialConsole } from "./components/SerialConsole";
 
 const tabs: TabItem[] = [
   {
@@ -106,6 +108,10 @@ function AppContent() {
     [activeTab, consoleContext],
   );
 
+  // Get floating console windows (not snapped)
+  const floatingConsoles =
+    consoleContext?.consoles.filter((c) => c.snapPosition === null) || [];
+
   return (
     <>
       <AnimatePresence>
@@ -148,6 +154,27 @@ function AppContent() {
           </AppLayout>
         </motion.div>
       )}
+
+      {/* Global floating console windows - shown across all tabs */}
+      {floatingConsoles.map((console) => (
+        <DraggableWindow
+          key={console.id}
+          initialPosition={console.position}
+          onPositionChange={(pos) =>
+            consoleContext?.updateConsole(console.id, { position: pos })
+          }
+          onDragStart={() => {}}
+          onDragEnd={() => {}}
+          zIndex={console.zIndex}
+          onFocus={() => consoleContext?.bringToFront(console.id)}
+        >
+          <SerialConsole
+            consoleId={console.id}
+            onClose={() => consoleContext?.removeConsole(console.id)}
+            existingPort={console.port}
+          />
+        </DraggableWindow>
+      ))}
     </>
   );
 }

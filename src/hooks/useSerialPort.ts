@@ -14,6 +14,10 @@ export interface UseSerialPortReturn {
   isConnecting: boolean;
   error: string | null;
   connect: (config: SerialPortConfig) => Promise<void>;
+  connectWithPort: (
+    port: SerialPort,
+    config: SerialPortConfig,
+  ) => Promise<void>;
   disconnect: () => Promise<void>;
   sendData: (data: string) => Promise<void>;
   receivedData: string;
@@ -99,6 +103,74 @@ export function useSerialPort(): UseSerialPortReturn {
     }
   }, []);
 
+  const connectWithPort = useCallback(
+    async (selectedPort: SerialPort, config: SerialPortConfig) => {
+      try {
+        setIsConnecting(true);
+        setError(null);
+
+        // Port is already opened by the reusable transport
+        // Check if it's already open, if not open it
+        if (!selectedPort.readable || !selectedPort.writable) {
+          await selectedPort.open({
+            baudRate: config.baudRate,
+            dataBits: config.dataBits ?? 8,
+            stopBits: config.stopBits ?? 1,
+            parity: config.parity ?? "none",
+            flowControl: config.flowControl ?? "none",
+          });
+        }
+
+        setPort(selectedPort);
+        setIsConnected(true);
+
+        // Set up the writer
+        if (selectedPort.writable) {
+          writerRef.current = selectedPort.writable.getWriter();
+        }
+
+        // Set up the reader
+        if (selectedPort.readable) {
+          const reader = selectedPort.readable.getReader();
+          readerRef.current = reader;
+          readLoopRef.current = true;
+
+          // Start reading loop
+          (async () => {
+            const decoder = new TextDecoder();
+            try {
+              while (readLoopRef.current) {
+                const { value, done } = await reader.read();
+                if (done) {
+                  break;
+                }
+                if (value) {
+                  const text = decoder.decode(value, { stream: true });
+                  setReceivedData((prev) => prev + text);
+                }
+              }
+            } catch (err) {
+              if (err instanceof Error && err.name !== "NetworkError") {
+                console.error("Serial read error:", err);
+                setError(err.message);
+              }
+            } finally {
+              reader.releaseLock();
+            }
+          })();
+        }
+      } catch (err) {
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to connect with port";
+        setError(errorMsg);
+        setIsConnected(false);
+      } finally {
+        setIsConnecting(false);
+      }
+    },
+    [],
+  );
+
   const disconnect = useCallback(async () => {
     try {
       // Stop the read loop
@@ -167,6 +239,7 @@ export function useSerialPort(): UseSerialPortReturn {
     isConnecting,
     error,
     connect,
+    connectWithPort,
     disconnect,
     sendData,
     receivedData,

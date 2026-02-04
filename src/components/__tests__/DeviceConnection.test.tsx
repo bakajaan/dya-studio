@@ -10,6 +10,7 @@ import {
   DeviceConnectionProvider,
   ConnectionContext,
 } from "../DeviceConnection";
+import { ConsoleProvider } from "../../contexts/ConsoleContext";
 import { useContext } from "react";
 import { useZMKApp } from "@cormoran/zmk-studio-react-hook";
 import { setupZMKMocks } from "@cormoran/zmk-studio-react-hook/testing";
@@ -23,6 +24,12 @@ jest.mock("@zmkfirmware/zmk-studio-ts-client", () => ({
 // Mock the serial transport
 jest.mock("@zmkfirmware/zmk-studio-ts-client/transport/serial", () => ({
   connect: jest.fn(),
+}));
+
+// Mock the reusable serial transport
+jest.mock("../../lib/transport/reusableSerial", () => ({
+  connectReusableSerial: jest.fn(),
+  ReusableRpcTransport: jest.fn(),
 }));
 
 // Mock the BLE transport
@@ -57,6 +64,15 @@ function TestComponent() {
   );
 }
 
+// Helper to render with required providers
+function renderWithProviders(component: React.ReactElement) {
+  return render(
+    <ConsoleProvider>
+      <DeviceConnectionProvider>{component}</DeviceConnectionProvider>
+    </ConsoleProvider>,
+  );
+}
+
 describe("DeviceConnection", () => {
   let mocks: ReturnType<typeof setupZMKMocks>;
 
@@ -67,11 +83,7 @@ describe("DeviceConnection", () => {
 
   describe("Initial State", () => {
     test("renders with disconnected state initially", () => {
-      render(
-        <DeviceConnectionProvider>
-          <TestComponent />
-        </DeviceConnectionProvider>,
-      );
+      renderWithProviders(<TestComponent />);
 
       expect(screen.getByTestId("connection-status")).toHaveTextContent(
         "Disconnected",
@@ -80,11 +92,7 @@ describe("DeviceConnection", () => {
     });
 
     test("does not show device name when disconnected", () => {
-      render(
-        <DeviceConnectionProvider>
-          <TestComponent />
-        </DeviceConnectionProvider>,
-      );
+      renderWithProviders(<TestComponent />);
 
       expect(screen.queryByTestId("device-name")).not.toBeInTheDocument();
     });
