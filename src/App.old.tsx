@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useContext, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   IconBattery2,
@@ -11,9 +11,13 @@ import {
 } from "@tabler/icons-react";
 
 import { SplashScreen } from "./components/SplashScreen";
+import {
+  DeviceConnectionProvider,
+  ConnectionContext,
+} from "./components/DeviceConnection";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import { AppStateProvider } from "./contexts/AppStateContext";
-import { useAppState } from "./contexts/AppStateContextDef";
+import { SerialConsoleProvider } from "./contexts/SerialConsoleContext";
+import { useSerialConsoleContext } from "./contexts/SerialConsoleContextDef";
 import { TabNavigation } from "./components/TabNavigation";
 import type { TabItem } from "./components/TabNavigation";
 import { AppLayout } from "./layouts/AppLayout";
@@ -30,19 +34,23 @@ import { SerialConsole } from "./components/SerialConsole";
 function App() {
   return (
     <ThemeProvider>
-      <AppStateProvider>
-        <AppContent />
-      </AppStateProvider>
+      <SerialConsoleProvider>
+        <DeviceConnectionProvider>
+          <AppContent />
+        </DeviceConnectionProvider>
+      </SerialConsoleProvider>
     </ThemeProvider>
   );
 }
 
 function AppContent() {
-  const appState = useAppState();
+  const connection = useContext(ConnectionContext);
+  const consoleContext = useSerialConsoleContext();
   const [activeTab, setActiveTab] = useState("battery");
+  const [showConsoleFallback, setShowConsoleFallback] = useState(false);
 
-  // Base tabs - always available when ZMK connected
-  const baseTabs: TabItem[] = [
+  // Tabs array - conditionally include debug console tab
+  const tabs: TabItem[] = [
     {
       id: "battery",
       label: "Battery",
@@ -79,12 +87,8 @@ function AppContent() {
       icon: <IconSettings size={18} />,
       content: <SettingsPage />,
     },
-  ];
-
-  // Console tab only appears when serial console is connected
-  const tabs: TabItem[] = [
-    ...baseTabs,
-    ...(appState.serialConnected
+    // Add debug console tab when connected to ZMK Studio
+    ...(connection.isConnected
       ? [
           {
             id: "console",
@@ -96,35 +100,47 @@ function AppContent() {
       : []),
   ];
 
-  // Handle tab changes
+  // Handle tab changes - move console to/from window
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId);
 
-    if (tabId === "console") {
-      appState.onConsoleTabActivated();
-    } else if (activeTab === "console") {
-      appState.onOtherTabActivated();
+    // If switching away from console tab while console has active connection
+    if (
+      activeTab === "console" &&
+      tabId !== "console" &&
+      consoleContext.hasActiveConnection
+    ) {
+      consoleContext.showAsWindow();
+    }
+
+    // If switching to console tab while console is in window
+    if (tabId === "console" && consoleContext.position === "window") {
+      consoleContext.showInTab();
     }
   };
 
-  // Auto-switch to console tab when entering state D
+  // Monitor ZMK connection errors and show console fallback
   useEffect(() => {
-    if (appState.state === "D" && activeTab !== "console") {
-      setTimeout(() => setActiveTab("console"), 0);
+    if (!connection.isConnected && connection.error && !connection.isLoading) {
+      // Check if this is an unexpected error (not user cancellation)
+      if (
+        !connection.error.includes("cancelled") &&
+        !connection.error.includes("User") &&
+        !connection.error.includes("selected")
+      ) {
+        // Use setTimeout to avoid setState within effect
+        setTimeout(() => {
+          setShowConsoleFallback(true);
+          consoleContext.showAsWindow();
+        }, 0);
+      }
     }
-  }, [appState.state, activeTab]);
-
-  // Show splash screen in states A and C
-  const showSplashScreen = appState.state === "A" || appState.state === "C";
-  // Show main app in states B, D, E
-  const showMainApp = appState.state === "B" || appState.state === "D" || appState.state === "E";
-  // Show console window in states C and E
-  const showConsoleWindow = appState.state === "C" || appState.state === "E";
+  }, [connection.error, connection.isConnected, connection.isLoading, consoleContext]);
 
   return (
     <>
       <AnimatePresence>
-        {showSplashScreen && (
+        {!connection.isConnected && (
           <motion.div
             key="splash"
             initial={{ opacity: 1 }}
@@ -132,15 +148,15 @@ function AppContent() {
             transition={{ duration: 0.3 }}
           >
             <SplashScreen
-              onConnect={appState.onConnect}
-              isConnecting={appState.isLoading}
-              error={appState.error}
+              onConnect={connection.onConnect}
+              isConnecting={connection.isLoading}
+              error={connection.error}
             />
           </motion.div>
         )}
       </AnimatePresence>
 
-      {showMainApp && (
+      {connection.isConnected && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -148,11 +164,11 @@ function AppContent() {
           className="h-screen"
         >
           <AppLayout
-            isConnected={appState.zmkConnected}
-            deviceName={appState.deviceName}
-            onConnect={appState.onConnect}
-            onDisconnect={appState.onDisconnect}
-            isConnecting={appState.isLoading}
+            isConnected={connection.isConnected}
+            deviceName={connection.deviceName}
+            onConnect={connection.onConnect}
+            onDisconnect={connection.onDisconnect}
+            isConnecting={connection.isLoading}
           >
             <TabNavigation
               tabs={tabs}
@@ -163,19 +179,21 @@ function AppContent() {
         </motion.div>
       )}
 
-      {/* Serial Console Window - shown in states C and E */}
-      {showConsoleWindow && (
+      {/* Draggable Console Window */}
+      {consoleContext.position === "window" && (
         <DraggableWindow
           open={true}
-          onClose={appState.onSerialDisconnect}
+          onClose={() => {
+            consoleContext.hide();
+            setShowConsoleFallback(false);
+          }}
           title="Serial Console"
         >
           <SerialConsole
-            onConnectionChange={(connected) => {
-              if (!connected) {
-                appState.onSerialDisconnect();
-              }
-            }}
+            autoConnect={showConsoleFallback}
+            onConnectionChange={(connected) =>
+              consoleContext.setConnectionState(connected)
+            }
           />
         </DraggableWindow>
       )}

@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import type { RpcTransport } from "@zmkfirmware/zmk-studio-ts-client/transport/index";
 
 export interface SerialConsoleMessage {
   timestamp: Date;
@@ -21,7 +20,6 @@ export interface UseSerialConsoleReturn {
   messages: SerialConsoleMessage[];
   settings: SerialConsoleSettings;
   connect: () => Promise<void>;
-  connectWithTransport: (transport: RpcTransport) => void;
   disconnect: () => void;
   sendMessage: (text: string) => Promise<void>;
   clearMessages: () => void;
@@ -41,7 +39,6 @@ export function useSerialConsole(): UseSerialConsoleReturn {
   });
 
   const portRef = useRef<SerialPort | null>(null);
-  const transportRef = useRef<RpcTransport | null>(null);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(
     null,
   );
@@ -61,9 +58,6 @@ export function useSerialConsole(): UseSerialConsoleReturn {
     if (portRef.current) {
       portRef.current.close();
       portRef.current = null;
-    }
-    if (transportRef.current) {
-      transportRef.current = null;
     }
     setIsConnected(false);
     setError(null);
@@ -99,64 +93,6 @@ export function useSerialConsole(): UseSerialConsoleReturn {
     [settings.filterRegex, settings.replacePattern, settings.replaceWith],
   );
 
-  const startReading = useCallback(
-    (readable: ReadableStream<Uint8Array>, writable: WritableStream<Uint8Array>) => {
-      const reader = readable.getReader();
-      readerRef.current = reader;
-
-      const writer = writable.getWriter();
-      writerRef.current = writer;
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      (async () => {
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              const processedLine = processLine(line.trim());
-              if (processedLine !== null && processedLine !== "") {
-                setMessages((prev) => [
-                  ...prev,
-                  {
-                    timestamp: new Date(),
-                    text: processedLine,
-                    type: "received",
-                  },
-                ]);
-              }
-            }
-          }
-        } catch (err) {
-          if ((err as Error).name !== "AbortError") {
-            setError((err as Error).message);
-            setIsConnected(false);
-          }
-        }
-      })();
-    },
-    [processLine],
-  );
-
-  const connectWithTransport = useCallback(
-    (transport: RpcTransport) => {
-      transportRef.current = transport;
-      setIsConnected(true);
-      setIsConnecting(false);
-      setError(null);
-
-      startReading(transport.readable, transport.writable);
-    },
-    [startReading],
-  );
-
   const connect = useCallback(async () => {
     if (!("serial" in navigator)) {
       setError("Web Serial API is not supported in this browser");
@@ -174,14 +110,55 @@ export function useSerialConsole(): UseSerialConsoleReturn {
       setIsConnected(true);
       setIsConnecting(false);
 
-      if (port.readable && port.writable) {
-        startReading(port.readable, port.writable);
+      // Start reading from the port
+      const reader = port.readable?.getReader();
+      if (reader) {
+        readerRef.current = reader;
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        (async () => {
+          try {
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() || "";
+
+              for (const line of lines) {
+                const processedLine = processLine(line.trim());
+                if (processedLine !== null && processedLine !== "") {
+                  setMessages((prev) => [
+                    ...prev,
+                    {
+                      timestamp: new Date(),
+                      text: processedLine,
+                      type: "received",
+                    },
+                  ]);
+                }
+              }
+            }
+          } catch (err) {
+            if ((err as Error).name !== "AbortError") {
+              setError((err as Error).message);
+            }
+          }
+        })();
+      }
+
+      // Get writer for sending data
+      const writer = port.writable?.getWriter();
+      if (writer) {
+        writerRef.current = writer;
       }
     } catch (err) {
       setError((err as Error).message);
       setIsConnecting(false);
     }
-  }, [settings.baudRate, startReading]);
+  }, [settings.baudRate, processLine]);
 
   const sendMessage = useCallback(async (text: string) => {
     if (!writerRef.current) {
@@ -231,7 +208,6 @@ export function useSerialConsole(): UseSerialConsoleReturn {
     messages,
     settings,
     connect,
-    connectWithTransport,
     disconnect,
     sendMessage,
     clearMessages,

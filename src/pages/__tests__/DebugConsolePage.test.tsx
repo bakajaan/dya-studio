@@ -1,27 +1,50 @@
 import { render, screen } from "@testing-library/react";
 import { DebugConsolePage } from "../DebugConsolePage";
-import { SerialConsoleContext } from "../../contexts/SerialConsoleContextDef";
+import { AppStateContext } from "../../contexts/AppStateContextDef";
+import type { AppStateContextValue } from "../../contexts/AppStateContextDef";
 
-// Mock the SerialConsole component
-jest.mock("../../components/SerialConsole", () => ({
-  SerialConsole: ({ onConnectionChange }: { onConnectionChange?: (connected: boolean) => void }) => {
-    return <div data-testid="serial-console">Serial Console Component</div>;
+// Mock the useSerialConsole hook
+const mockSerialConsole = {
+  isConnected: false,
+  isConnecting: false,
+  error: null,
+  messages: [],
+  settings: {
+    baudRate: 115200,
+    filterRegex: "",
+    replacePattern: "",
+    replaceWith: "",
   },
-}));
+  connect: jest.fn(),
+  connectWithTransport: jest.fn(),
+  disconnect: jest.fn(),
+  sendMessage: jest.fn(),
+  clearMessages: jest.fn(),
+  updateSettings: jest.fn(),
+};
 
 describe("DebugConsolePage", () => {
-  const mockShowAsWindow = jest.fn();
-  const mockShowInTab = jest.fn();
-  const mockHide = jest.fn();
-  const mockSetConnectionState = jest.fn();
+  const mockOnConnect = jest.fn();
+  const mockOnDisconnect = jest.fn();
+  const mockOnSerialConnect = jest.fn();
+  const mockOnSerialDisconnect = jest.fn();
+  const mockOnConsoleTabActivated = jest.fn();
+  const mockOnOtherTabActivated = jest.fn();
 
-  const mockContextValue = {
-    position: "tab" as const,
-    hasActiveConnection: false,
-    showAsWindow: mockShowAsWindow,
-    showInTab: mockShowInTab,
-    hide: mockHide,
-    setConnectionState: mockSetConnectionState,
+  const mockContextValue: AppStateContextValue = {
+    state: "D",
+    zmkConnected: true,
+    serialConnected: true,
+    deviceName: "Test Device",
+    isLoading: false,
+    error: null,
+    onConnect: mockOnConnect,
+    onDisconnect: mockOnDisconnect,
+    onSerialConnect: mockOnSerialConnect,
+    onSerialDisconnect: mockOnSerialDisconnect,
+    onConsoleTabActivated: mockOnConsoleTabActivated,
+    onOtherTabActivated: mockOnOtherTabActivated,
+    serialConsole: mockSerialConsole,
   };
 
   beforeEach(() => {
@@ -30,9 +53,9 @@ describe("DebugConsolePage", () => {
 
   test("renders page header", () => {
     render(
-      <SerialConsoleContext.Provider value={mockContextValue}>
+      <AppStateContext.Provider value={mockContextValue}>
         <DebugConsolePage />
-      </SerialConsoleContext.Provider>,
+      </AppStateContext.Provider>,
     );
 
     expect(screen.getByText("Debug Console")).toBeInTheDocument();
@@ -41,43 +64,55 @@ describe("DebugConsolePage", () => {
     ).toBeInTheDocument();
   });
 
-  test("renders SerialConsole component", () => {
-    render(
-      <SerialConsoleContext.Provider value={mockContextValue}>
-        <DebugConsolePage />
-      </SerialConsoleContext.Provider>,
-    );
-
-    expect(screen.getByTestId("serial-console")).toBeInTheDocument();
-  });
-
   test("renders info box with tip", () => {
     render(
-      <SerialConsoleContext.Provider value={mockContextValue}>
+      <AppStateContext.Provider value={mockContextValue}>
         <DebugConsolePage />
-      </SerialConsoleContext.Provider>,
+      </AppStateContext.Provider>,
     );
 
     expect(screen.getByText(/Tip:/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/regex-based filtering and sed-style word replacement/i),
+      screen.getByText(/serial console connection is shared/i),
     ).toBeInTheDocument();
   });
 
-  test("moves console to tab when page is active with window position", () => {
-    const contextWithWindow = {
+  test("shows connected state when serial console is connected", () => {
+    const connectedContext = {
       ...mockContextValue,
-      position: "window" as const,
-      hasActiveConnection: true,
+      serialConnected: true,
+      serialConsole: {
+        ...mockSerialConsole,
+        isConnected: true,
+      },
     };
 
     render(
-      <SerialConsoleContext.Provider value={contextWithWindow}>
+      <AppStateContext.Provider value={connectedContext}>
         <DebugConsolePage />
-      </SerialConsoleContext.Provider>,
+      </AppStateContext.Provider>,
     );
 
-    // The effect should call showInTab when position is window and has active connection
-    expect(mockShowInTab).toHaveBeenCalled();
+    expect(screen.getByText("Serial Console")).toBeInTheDocument();
+    expect(screen.getByText("Disconnect")).toBeInTheDocument();
+  });
+
+  test("shows disconnected state when serial console is not connected", () => {
+    const disconnectedContext = {
+      ...mockContextValue,
+      serialConnected: false,
+      serialConsole: {
+        ...mockSerialConsole,
+        isConnected: false,
+      },
+    };
+
+    render(
+      <AppStateContext.Provider value={disconnectedContext}>
+        <DebugConsolePage />
+      </AppStateContext.Provider>,
+    );
+
+    expect(screen.getByText("Console disconnected")).toBeInTheDocument();
   });
 });
