@@ -1,4 +1,5 @@
-import { createContext, useState, useCallback, useRef, ReactNode } from "react";
+import { createContext, useState, useCallback, useRef } from "react";
+import type { ReactNode } from "react";
 import type { WindowPosition } from "../components/DraggableWindow";
 
 export interface ConsoleWindow {
@@ -13,6 +14,7 @@ interface ConsoleContextValue {
   consoles: ConsoleWindow[];
   maxZIndex: number;
   addConsole: () => void;
+  addConsoleFromPort: (port: SerialPort) => void;
   removeConsole: (id: string) => void;
   updateConsole: (id: string, updates: Partial<ConsoleWindow>) => void;
   bringToFront: (id: string) => void;

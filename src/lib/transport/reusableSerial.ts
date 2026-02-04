@@ -104,7 +104,7 @@ export async function tryZMKConnection(
   | { success: false; port: SerialPort }
 > {
   return new Promise((resolve) => {
-    let timeoutId: NodeJS.Timeout | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let resolved = false;
 
     const handleTimeout = () => {
