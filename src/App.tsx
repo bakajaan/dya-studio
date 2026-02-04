@@ -7,6 +7,7 @@ import {
   IconKeyboard,
   IconPointer,
   IconSettings,
+  IconTerminal2,
 } from "@tabler/icons-react";
 
 import { SplashScreen } from "./components/SplashScreen";
@@ -24,6 +25,7 @@ import { HealthCheckPage } from "./pages/HealthCheckPage";
 import { KeymapPage } from "./pages/KeymapPage";
 import { TrackballPage } from "./pages/TrackballPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { ConsolePage } from "./pages/ConsolePage";
 
 const tabs: TabItem[] = [
   {
@@ -61,6 +63,12 @@ const tabs: TabItem[] = [
     label: "Settings",
     icon: <IconSettings size={18} />,
     content: <SettingsPage />,
+  },
+  {
+    id: "console",
+    label: "Console",
+    icon: <IconTerminal2 size={18} />,
+    content: <ConsolePage />,
   },
 ];
 
