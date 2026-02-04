@@ -1,11 +1,12 @@
 import { motion } from "framer-motion";
 import { IconBluetooth, IconUsb, IconDeviceDesktop } from "@tabler/icons-react";
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import DyaLogo from "../assets/dya.svg?react";
 import type { ConnectionMethod } from "./DeviceConnection";
 
 interface SplashScreenProps {
   onConnect: (method: ConnectionMethod) => void;
+  onConnectWithFallback?: (method: ConnectionMethod) => Promise<boolean>;
   isConnecting: boolean;
   error: string | null;
 }
@@ -21,12 +22,21 @@ function DisabledSlash({ color }: { color: string }) {
 
 export function SplashScreen({
   onConnect,
+  onConnectWithFallback,
   isConnecting,
   error,
 }: SplashScreenProps) {
   // Check if Web Serial API and Web Bluetooth API are available
   const isSerialAvailable = useMemo(() => "serial" in navigator, []);
   const isBLEAvailable = useMemo(() => "bluetooth" in navigator, []);
+
+  const handleSerialConnect = useCallback(async () => {
+    if (onConnectWithFallback) {
+      await onConnectWithFallback("serial");
+    } else {
+      onConnect("serial");
+    }
+  }, [onConnect, onConnectWithFallback]);
 
   return (
     <motion.div
@@ -114,7 +124,7 @@ export function SplashScreen({
           {/* Connection buttons */}
           <div className="flex gap-6">
             <button
-              onClick={() => onConnect("serial")}
+              onClick={handleSerialConnect}
               disabled={isConnecting || !isSerialAvailable}
               className="relative w-16 h-16 rounded-full flex items-center justify-center border-2 transition-all disabled:opacity-30 disabled:cursor-not-allowed border-[var(--color-electric)] bg-[var(--color-electric)]/10 hover:bg-[var(--color-electric)]/20 hover:border-[var(--color-electric)] hover:shadow-[0_0_20px_rgba(0,212,255,0.3)]"
               aria-label="Connect via USB"

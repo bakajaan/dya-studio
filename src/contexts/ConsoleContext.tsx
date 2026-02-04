@@ -56,6 +56,27 @@ export function ConsoleProvider({ children }: ConsoleProviderProps) {
     setMaxZIndex((prev) => prev + 1);
   }, [consoles.length, maxZIndex]);
 
+  const addConsoleFromPort = useCallback(
+    (port: SerialPort) => {
+      const id = `console-${nextIdRef.current++}`;
+      const newConsole: ConsoleWindow = {
+        id,
+        position: {
+          x: 100 + ((consoles.length * 30) % 200),
+          y: 100 + ((consoles.length * 30) % 200),
+          width: 600,
+          height: 400,
+        },
+        zIndex: maxZIndex + 1,
+        snapPosition: null,
+        port,
+      };
+      setConsoles((prev) => [...prev, newConsole]);
+      setMaxZIndex((prev) => prev + 1);
+    },
+    [consoles.length, maxZIndex],
+  );
+
   const removeConsole = useCallback((id: string) => {
     setConsoles((prev) => prev.filter((c) => c.id !== id));
     savedSnapStatesRef.current.delete(id);
@@ -159,6 +180,7 @@ export function ConsoleProvider({ children }: ConsoleProviderProps) {
     consoles,
     maxZIndex,
     addConsole,
+    addConsoleFromPort,
     removeConsole,
     updateConsole,
     bringToFront,

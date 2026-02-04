@@ -118,6 +118,7 @@ function AppContent() {
           >
             <SplashScreen
               onConnect={connection.onConnect}
+              onConnectWithFallback={connection.onConnectWithFallback}
               isConnecting={connection.isLoading}
               error={connection.error}
             />

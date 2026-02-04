@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
-import { createContext, useCallback } from "react";
+import { createContext, useCallback, useContext } from "react";
 import { useZMKApp, ZMKAppContext } from "@cormoran/zmk-studio-react-hook";
 import { connect as connectSerial } from "@zmkfirmware/zmk-studio-ts-client/transport/serial";
 import { connect as connectBLE } from "@zmkfirmware/zmk-studio-ts-client/transport/gatt";
 import { connect as connectDemo } from "../lib/transport/demo";
+import { ConsoleContext } from "../contexts/ConsoleContext";
 
 export type ConnectionMethod = "serial" | "ble" | "demo";
 
@@ -15,6 +16,7 @@ interface ConnectionContextValue {
   onDisconnect: () => void;
   isLoading: boolean;
   error: string | null;
+  onConnectWithFallback: (method: ConnectionMethod) => Promise<boolean>;
 }
 
 const ConnectionContext = createContext<ConnectionContextValue>({
@@ -24,6 +26,7 @@ const ConnectionContext = createContext<ConnectionContextValue>({
   onDisconnect: () => {},
   isLoading: false,
   error: null,
+  onConnectWithFallback: async () => false,
 });
 
 interface DeviceConnectionProviderProps {
@@ -34,6 +37,7 @@ export function DeviceConnectionProvider({
   children,
 }: DeviceConnectionProviderProps) {
   const zmkApp = useZMKApp();
+  const consoleContext = useContext(ConsoleContext);
 
   const handleConnect = useCallback(
     async (method: ConnectionMethod) => {
@@ -50,6 +54,39 @@ export function DeviceConnectionProvider({
     [zmkApp],
   );
 
+  // Connect with fallback to serial console if ZMK connection fails
+  const handleConnectWithFallback = useCallback(
+    async (method: ConnectionMethod): Promise<boolean> => {
+      if (method !== "serial") {
+        // Non-serial connections don't have fallback
+        await handleConnect(method);
+        return true;
+      }
+
+      try {
+        // Try ZMK connection with timeout
+        const connectPromise = handleConnect(method);
+        const timeoutPromise = new Promise<void>((_, reject) => {
+          setTimeout(() => reject(new Error("Connection timeout")), 5000);
+        });
+
+        await Promise.race([connectPromise, timeoutPromise]);
+        return true;
+      } catch {
+        // ZMK connection failed, fallback to serial console
+        console.log("ZMK connection failed, opening serial console...");
+
+        // Add a serial console (user will need to select port again)
+        if (consoleContext) {
+          consoleContext.addConsole();
+        }
+
+        return false;
+      }
+    },
+    [handleConnect, consoleContext],
+  );
+
   const handleDisconnect = useCallback(() => {
     zmkApp.disconnect();
   }, [zmkApp]);
@@ -61,6 +98,7 @@ export function DeviceConnectionProvider({
     onDisconnect: handleDisconnect,
     isLoading: zmkApp.state.isLoading,
     error: zmkApp.state.error,
+    onConnectWithFallback: handleConnectWithFallback,
   };
 
   return (
