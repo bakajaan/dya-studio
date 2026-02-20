@@ -95,31 +95,52 @@ export function bindingToZmk(
 
   const name = behavior.displayName.toLowerCase();
 
-  if (name === "trans" || behavior.displayName === "&trans") return "&trans";
+  if (
+    name === "trans" ||
+    name === "transparent" ||
+    behavior.displayName === "&trans"
+  )
+    return "&trans";
   if (name === "none" || behavior.id === 6) return "&none";
   if (name === "bootloader") return "&bootloader";
-  if (name === "sys_reset") return "&sys_reset";
+  if (name === "sys_reset" || name === "reset") return "&sys_reset";
 
-  if (name === "kp" || behavior.displayName === "Key Press") {
+  if (
+    name === "kp" ||
+    name === "key press" ||
+    behavior.displayName === "Key Press"
+  ) {
     return `&kp ${getZmkKeycodeName(binding.param1)}`;
   }
 
-  if (name === "bt") {
+  if (name === "bt" || name === "bluetooth") {
     const p1 = binding.param1;
     if (p1 <= 2) return `&bt ${BT_PARAMS[p1]}`;
     return `&bt BT_SEL ${p1 - 3}`;
   }
 
-  if (name === "mo" || behavior.displayName === "Momentary Layer") {
+  if (name === "mo" || name === "momentary layer") {
     return `&mo ${binding.param1}`;
   }
 
-  if (name === "lt" || behavior.displayName === "Layer-Tap") {
+  if (name === "lt" || name === "layer-tap") {
     return `&lt ${binding.param1} ${getZmkKeycodeName(binding.param2)}`;
   }
 
-  if (name === "mt" || behavior.displayName === "Mod-Tap") {
+  if (name === "mt" || name === "mod-tap") {
     return `&mt ${getZmkKeycodeName(binding.param1)} ${getZmkKeycodeName(binding.param2)}`;
+  }
+
+  if (name === "to layer" || name === "to") {
+    return `&to ${binding.param1}`;
+  }
+
+  if (name === "toggle layer" || name === "tog") {
+    return `&tog ${binding.param1}`;
+  }
+
+  if (name === "sticky key" || name === "sk") {
+    return `&sk ${getZmkKeycodeName(binding.param1)}`;
   }
 
   const id = behavior.displayName.toLowerCase().replace(/\s+/g, "_");
