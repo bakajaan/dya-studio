@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   IconBattery2,
   IconBluetooth,
+  IconBrandGithub,
   IconHome,
   IconKeyboard,
   IconPointer,
@@ -22,6 +23,7 @@ import { AppLayout } from "./layouts/AppLayout";
 import { HomePage } from "./pages/HomePage";
 import { BatteryPage } from "./pages/BatteryPage";
 import { BLEConnectionsPage } from "./pages/BLEConnectionsPage";
+import { GitHubPage } from "./pages/GitHubPage";
 import { KeymapPage } from "./pages/KeymapPage";
 import { TrackballPage } from "./pages/TrackballPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -62,6 +64,12 @@ const tabs: TabItem[] = [
     label: "Settings",
     icon: <IconSettings size={18} />,
     content: <SettingsPage />,
+  },
+  {
+    id: "github",
+    label: "GitHub",
+    icon: <IconBrandGithub size={18} />,
+    content: <GitHubPage />,
   },
 ];
 
