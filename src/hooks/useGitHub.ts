@@ -271,7 +271,7 @@ export function useGitHub(isDemo: boolean): UseGitHubReturn {
   const commitChanges = useCallback(
     async (keymap: Keymap, behaviors: Map<number, BehaviorDefinition>) => {
       if (isDemo) {
-        alert(
+        setError(
           "Demo mode: commit is disabled. In real mode, this would create a PR on GitHub.",
         );
         return;

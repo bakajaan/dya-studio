@@ -1,7 +1,6 @@
 import type {
   BehaviorDefinition,
   Keymap,
-  Layer,
   BehaviorBinding,
 } from "../hooks/useKeymap";
 
@@ -90,9 +89,7 @@ const BT_PARAMS: Record<number, string> = {
 export function bindingToZmk(
   binding: BehaviorBinding,
   behaviors: Map<number, BehaviorDefinition>,
-  layers?: Layer[],
 ): string {
-  void layers;
   const behavior = behaviors.get(binding.behaviorId);
   if (!behavior) return `&unknown`;
 
@@ -142,9 +139,7 @@ export function patchKeymapFile(
       return _match;
     }
     const layer = layers[layerIndex++];
-    const zmkBindings = layer.bindings.map((b) =>
-      bindingToZmk(b, behaviors, layers),
-    );
+    const zmkBindings = layer.bindings.map((b) => bindingToZmk(b, behaviors));
     const lines: string[] = [];
     for (let i = 0; i < zmkBindings.length; i += 8) {
       lines.push("                " + zmkBindings.slice(i, i + 8).join(" "));

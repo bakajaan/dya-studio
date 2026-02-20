@@ -135,7 +135,12 @@ export async function commitFile(
   branch: string,
   sha: string,
 ): Promise<void> {
-  const encoded = btoa(unescape(encodeURIComponent(content)));
+  const encoded = btoa(
+    new Uint8Array(new TextEncoder().encode(content)).reduce(
+      (data, byte) => data + String.fromCharCode(byte),
+      "",
+    ),
+  );
   const res = await githubFetch(
     token,
     `/repos/${owner}/${repo}/contents/${path}`,

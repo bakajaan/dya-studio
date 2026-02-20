@@ -77,10 +77,6 @@ export function GitHubPage() {
 
   const handleCommit = () => {
     if (!keymap || !behaviors) return;
-    if (isDemo) {
-      alert("Demo mode: In real mode, this would create a PR on GitHub.");
-      return;
-    }
     gh.commitChanges(keymap, behaviors);
   };
 
