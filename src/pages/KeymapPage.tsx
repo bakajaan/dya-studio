@@ -11,6 +11,7 @@ import {
   IconRestore,
   IconAlertTriangle,
   IconInfoCircle,
+  IconFileExport,
 } from "@tabler/icons-react";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { ConnectionContext } from "../components/DeviceConnection";
@@ -19,9 +20,11 @@ import { KeyboardLayout } from "../components/KeyboardLayout";
 import { KeycodeSelector } from "../components/KeycodeSelector";
 import { UnlockPrompt } from "../components/UnlockPrompt";
 import { SensorRotationConfig } from "../components/SensorRotationConfig";
+import { KeymapExportDialog } from "../components/KeymapExportDialog";
 import { useKeymap } from "../hooks/useKeymap";
 import { useRuntimeSensorRotate } from "../hooks/useRuntimeSensorRotate";
 import { getAvailableLayouts, getLayoutLabel } from "../lib/keyboardLayouts";
+import { generateZMKKeymapContent } from "../lib/zmkExport";
 import type { BehaviorBinding } from "../hooks/useKeymap";
 
 export function KeymapPage() {
@@ -38,6 +41,7 @@ export function KeymapPage() {
   const [showKeycodeSelector, setShowKeycodeSelector] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDiscarding, setIsDiscarding] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
 
   // Get current layer
   const currentLayer = useMemo(() => {
@@ -180,6 +184,16 @@ export function KeymapPage() {
     keymap.loadKeymapData();
   }, [keymap]);
 
+  // Generate ZMK keymap export content
+  const exportContent = useMemo(() => {
+    if (!keymap.keymap) return "";
+    return generateZMKKeymapContent({
+      keymap: keymap.keymap,
+      behaviors: keymap.behaviors,
+      physicalLayouts: keymap.physicalLayouts,
+    });
+  }, [keymap.keymap, keymap.behaviors, keymap.physicalLayouts]);
+
   return (
     <div className="p-6 h-full overflow-auto">
       <div className="max-w-6xl mx-auto">
@@ -210,6 +224,13 @@ export function KeymapPage() {
                   ● Unsaved changes
                 </span>
               )}
+              <button
+                className="btn-ghost text-sm flex items-center gap-1.5 flex-shrink-0"
+                onClick={() => setShowExportDialog(true)}
+              >
+                <IconFileExport size={16} />
+                Export
+              </button>
               <button
                 className="btn-ghost text-sm flex items-center gap-1.5 flex-shrink-0"
                 onClick={handleDiscard}
@@ -609,6 +630,13 @@ export function KeymapPage() {
         open={keymap.unlockRequired}
         onClose={() => keymap.clearUnlockRequired()}
         onRetry={handleUnlockRetry}
+      />
+
+      {/* Keymap Export Dialog */}
+      <KeymapExportDialog
+        open={showExportDialog}
+        onClose={() => setShowExportDialog(false)}
+        content={exportContent}
       />
     </div>
   );
