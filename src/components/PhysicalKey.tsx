@@ -107,7 +107,7 @@ export function PhysicalKey({
             ? "bg-[var(--color-electric)]/20 border-[var(--color-electric)] shadow-[0_0_10px_rgba(0,212,255,0.3)]"
             : isModified
               ? "bg-[var(--color-neon)]/10 border-[var(--color-neon)]/50 hover:border-[var(--color-neon)]"
-              : "bg-[var(--color-surface)] border-[var(--color-border)] hover:border-[var(--color-electric)]/50 hover:bg-[var(--color-electric)]/5"
+              : "bg-[var(--color-surface-elevated)] border-[var(--color-border-hover)] hover:border-[var(--color-electric)]/50 hover:bg-[var(--color-electric)]/5"
         }
       `}
       style={style}
