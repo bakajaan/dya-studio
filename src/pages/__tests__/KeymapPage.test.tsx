@@ -27,6 +27,8 @@ import { useKeymap } from "../../hooks/useKeymap";
 const mockUseKeymap = useKeymap as jest.MockedFunction<typeof useKeymap>;
 
 describe("KeymapPage", () => {
+  const originalNavigator = globalThis.navigator;
+
   // Default mock context values
   const mockConnectionContext = {
     isConnected: false,
@@ -117,6 +119,13 @@ describe("KeymapPage", () => {
       getBehavior: jest.fn(),
       getBindingDisplayName: jest.fn().mockReturnValue("Key"),
       clearUnlockRequired: jest.fn(),
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "navigator", {
+      value: originalNavigator,
+      configurable: true,
     });
   });
 
@@ -253,6 +262,36 @@ describe("KeymapPage", () => {
       await user.click(screen.getByText("Copy JSON"));
 
       expect(screen.getByText("Copy failed")).toBeInTheDocument();
+    });
+
+    it("should copy keymap json when clipboard api is available", async () => {
+      const user = userEvent.setup();
+      const mockWriteText = jest.fn().mockResolvedValue(undefined);
+      const testNavigator = Object.create(window.navigator);
+      Object.defineProperty(testNavigator, "clipboard", {
+        value: { writeText: mockWriteText },
+        configurable: true,
+      });
+      Object.defineProperty(globalThis, "navigator", {
+        value: testNavigator,
+        configurable: true,
+      });
+
+      renderComponent(
+        { isConnected: true },
+        {
+          keymap: mockKeymap,
+          physicalLayouts: mockPhysicalLayouts,
+          behaviors: mockBehaviors,
+        },
+      );
+
+      await user.click(screen.getByText("Copy JSON"));
+
+      expect(mockWriteText).toHaveBeenCalledWith(
+        JSON.stringify(mockKeymap, null, 2),
+      );
+      expect(screen.getByText("Copied")).toBeInTheDocument();
     });
 
     it("should disable save button when no unsaved changes", () => {

@@ -1,4 +1,11 @@
-import { useState, useContext, useCallback, useMemo } from "react";
+import {
+  useState,
+  useContext,
+  useCallback,
+  useMemo,
+  useEffect,
+  useRef,
+} from "react";
 import {
   IconKeyboard,
   IconDeviceFloppy,
@@ -25,6 +32,8 @@ import { useRuntimeSensorRotate } from "../hooks/useRuntimeSensorRotate";
 import { getAvailableLayouts, getLayoutLabel } from "../lib/keyboardLayouts";
 import type { BehaviorBinding } from "../hooks/useKeymap";
 
+const COPY_STATUS_TIMEOUT_MS = 3000;
+
 export function KeymapPage() {
   const connection = useContext(ConnectionContext);
   const keyboardLayoutContext = useContext(KeyboardLayoutContext);
@@ -41,6 +50,9 @@ export function KeymapPage() {
   const [isDiscarding, setIsDiscarding] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "error">(
     "idle",
+  );
+  const copyStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
   );
 
   // Get current layer
@@ -188,6 +200,11 @@ export function KeymapPage() {
   const handleCopyKeymapJson = useCallback(async () => {
     if (!keymap.keymap) return;
 
+    if (copyStatusTimeoutRef.current) {
+      clearTimeout(copyStatusTimeoutRef.current);
+      copyStatusTimeoutRef.current = null;
+    }
+
     try {
       if (!navigator.clipboard?.writeText) {
         throw new Error("Clipboard API unavailable");
@@ -200,10 +217,18 @@ export function KeymapPage() {
       setCopyStatus("error");
     }
 
-    window.setTimeout(() => {
+    copyStatusTimeoutRef.current = setTimeout(() => {
       setCopyStatus("idle");
-    }, 3000);
+    }, COPY_STATUS_TIMEOUT_MS);
   }, [keymap.keymap]);
+
+  useEffect(() => {
+    return () => {
+      if (copyStatusTimeoutRef.current) {
+        clearTimeout(copyStatusTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div className="p-6 h-full overflow-auto">
