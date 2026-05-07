@@ -74,6 +74,22 @@ export function KeymapPage() {
     return keymap.keymap.layers.map((l) => ({ id: l.id, name: l.name }));
   }, [keymap.keymap?.layers]);
 
+  const keymapJsonForCopy = useMemo(() => {
+    if (!keymap.keymap) return null;
+
+    const behaviorNamesById = Object.fromEntries(
+      Array.from(keymap.behaviors.entries()).map(([behaviorId, behavior]) => [
+        String(behaviorId),
+        behavior.displayName,
+      ]),
+    );
+
+    return {
+      ...keymap.keymap,
+      behaviorNamesById,
+    };
+  }, [keymap.keymap, keymap.behaviors]);
+
   // Get current binding for selected key
   const currentBinding = useMemo(() => {
     if (selectedKeyPosition === null || !currentLayer) return null;
@@ -198,7 +214,7 @@ export function KeymapPage() {
 
   // Handle copy keymap json
   const handleCopyKeymapJson = useCallback(async () => {
-    if (!keymap.keymap) return;
+    if (!keymapJsonForCopy) return;
 
     if (copyStatusTimeoutRef.current) {
       clearTimeout(copyStatusTimeoutRef.current);
@@ -210,7 +226,7 @@ export function KeymapPage() {
         throw new Error("Clipboard API unavailable");
       }
       await navigator.clipboard.writeText(
-        JSON.stringify(keymap.keymap, null, 2),
+        JSON.stringify(keymapJsonForCopy, null, 2),
       );
       setCopyStatus("success");
     } catch {
@@ -220,7 +236,7 @@ export function KeymapPage() {
     copyStatusTimeoutRef.current = setTimeout(() => {
       setCopyStatus("idle");
     }, COPY_STATUS_TIMEOUT_MS);
-  }, [keymap.keymap]);
+  }, [keymapJsonForCopy]);
 
   useEffect(() => {
     return () => {

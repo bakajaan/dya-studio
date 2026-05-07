@@ -84,6 +84,14 @@ describe("KeymapPage", () => {
     [2, { id: 2, displayName: "trans", metadata: [] }],
   ]);
 
+  const expectedCopiedKeymapJson = {
+    ...mockKeymap,
+    behaviorNamesById: {
+      "1": "kp",
+      "2": "trans",
+    },
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
 
@@ -289,7 +297,7 @@ describe("KeymapPage", () => {
       await user.click(screen.getByText("Copy JSON"));
 
       expect(mockWriteText).toHaveBeenCalledWith(
-        JSON.stringify(mockKeymap, null, 2),
+        JSON.stringify(expectedCopiedKeymapJson, null, 2),
       );
       expect(screen.getByText("Copied")).toBeInTheDocument();
     });
