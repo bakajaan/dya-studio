@@ -167,7 +167,7 @@ describe("KeymapPage", () => {
   const overrideClipboard = (
     clipboard: { writeText: jest.Mock } | undefined,
   ) => {
-    const testNavigator = Object.create(window.navigator);
+    const testNavigator = Object.create(originalNavigator);
     Object.defineProperty(testNavigator, "clipboard", {
       value: clipboard,
       configurable: true,

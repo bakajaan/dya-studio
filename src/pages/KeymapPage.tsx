@@ -243,6 +243,7 @@ export function KeymapPage() {
   }, [keymapJsonForCopy]);
 
   useEffect(() => {
+    // copyStatusTimeoutRef is stable across renders, so no dependencies are needed.
     return () => {
       if (copyStatusTimeoutRef.current) {
         clearTimeout(copyStatusTimeoutRef.current);
