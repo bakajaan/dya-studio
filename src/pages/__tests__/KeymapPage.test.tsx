@@ -27,6 +27,7 @@ import { useKeymap } from "../../hooks/useKeymap";
 const mockUseKeymap = useKeymap as jest.MockedFunction<typeof useKeymap>;
 
 describe("KeymapPage", () => {
+  // Capture once so tests can safely restore global navigator after overrides.
   const originalNavigator = globalThis.navigator;
 
   // Default mock context values
@@ -159,6 +160,20 @@ describe("KeymapPage", () => {
     );
   };
 
+  const overrideClipboard = (
+    clipboard: { writeText: jest.Mock } | undefined,
+  ) => {
+    const testNavigator = Object.create(window.navigator);
+    Object.defineProperty(testNavigator, "clipboard", {
+      value: clipboard,
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      value: testNavigator,
+      configurable: true,
+    });
+  };
+
   describe("Disconnected State", () => {
     it("should render header correctly", () => {
       renderComponent();
@@ -248,15 +263,7 @@ describe("KeymapPage", () => {
 
     it("should show copy error when clipboard api is unavailable", async () => {
       const user = userEvent.setup();
-      const testNavigator = Object.create(window.navigator);
-      Object.defineProperty(testNavigator, "clipboard", {
-        value: undefined,
-        configurable: true,
-      });
-      Object.defineProperty(globalThis, "navigator", {
-        value: testNavigator,
-        configurable: true,
-      });
+      overrideClipboard(undefined);
 
       renderComponent(
         { isConnected: true },
@@ -275,15 +282,7 @@ describe("KeymapPage", () => {
     it("should copy keymap json when clipboard api is available", async () => {
       const user = userEvent.setup();
       const mockWriteText = jest.fn().mockResolvedValue(undefined);
-      const testNavigator = Object.create(window.navigator);
-      Object.defineProperty(testNavigator, "clipboard", {
-        value: { writeText: mockWriteText },
-        configurable: true,
-      });
-      Object.defineProperty(globalThis, "navigator", {
-        value: testNavigator,
-        configurable: true,
-      });
+      overrideClipboard({ writeText: mockWriteText });
 
       renderComponent(
         { isConnected: true },
