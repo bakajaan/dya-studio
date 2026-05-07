@@ -226,6 +226,33 @@ describe("KeymapPage", () => {
 
       expect(screen.getByText("Save")).toBeInTheDocument();
       expect(screen.getByText("Reset All")).toBeInTheDocument();
+      expect(screen.getByText("Copy JSON")).toBeInTheDocument();
+    });
+
+    it("should show copy error when clipboard api is unavailable", async () => {
+      const user = userEvent.setup();
+      const testNavigator = Object.create(window.navigator);
+      Object.defineProperty(testNavigator, "clipboard", {
+        value: undefined,
+        configurable: true,
+      });
+      Object.defineProperty(globalThis, "navigator", {
+        value: testNavigator,
+        configurable: true,
+      });
+
+      renderComponent(
+        { isConnected: true },
+        {
+          keymap: mockKeymap,
+          physicalLayouts: mockPhysicalLayouts,
+          behaviors: mockBehaviors,
+        },
+      );
+
+      await user.click(screen.getByText("Copy JSON"));
+
+      expect(screen.getByText("Copy failed")).toBeInTheDocument();
     });
 
     it("should disable save button when no unsaved changes", () => {

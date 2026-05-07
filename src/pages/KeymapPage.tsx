@@ -2,6 +2,7 @@ import { useState, useContext, useCallback, useMemo } from "react";
 import {
   IconKeyboard,
   IconDeviceFloppy,
+  IconCopy,
   IconChevronUp,
   IconChevronDown,
   IconAlertCircle,
@@ -38,6 +39,9 @@ export function KeymapPage() {
   const [showKeycodeSelector, setShowKeycodeSelector] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDiscarding, setIsDiscarding] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "error">(
+    "idle",
+  );
 
   // Get current layer
   const currentLayer = useMemo(() => {
@@ -180,6 +184,27 @@ export function KeymapPage() {
     keymap.loadKeymapData();
   }, [keymap]);
 
+  // Handle copy keymap json
+  const handleCopyKeymapJson = useCallback(async () => {
+    if (!keymap.keymap) return;
+
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(
+        JSON.stringify(keymap.keymap, null, 2),
+      );
+      setCopyStatus("success");
+    } catch {
+      setCopyStatus("error");
+    }
+
+    window.setTimeout(() => {
+      setCopyStatus("idle");
+    }, 3000);
+  }, [keymap.keymap]);
+
   return (
     <div className="p-6 h-full overflow-auto">
       <div className="max-w-6xl mx-auto">
@@ -210,6 +235,22 @@ export function KeymapPage() {
                   ● Unsaved changes
                 </span>
               )}
+              {copyStatus === "success" && (
+                <span className="text-xs text-[var(--color-neon)] mr-1">
+                  Copied
+                </span>
+              )}
+              {copyStatus === "error" && (
+                <span className="text-xs text-red-400 mr-1">Copy failed</span>
+              )}
+              <button
+                className="btn-ghost text-sm flex items-center gap-1.5 flex-shrink-0"
+                onClick={handleCopyKeymapJson}
+                disabled={keymap.isLoading}
+              >
+                <IconCopy size={16} />
+                Copy JSON
+              </button>
               <button
                 className="btn-ghost text-sm flex items-center gap-1.5 flex-shrink-0"
                 onClick={handleDiscard}
