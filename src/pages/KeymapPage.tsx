@@ -34,6 +34,17 @@ import type { BehaviorBinding } from "../hooks/useKeymap";
 
 const COPY_STATUS_TIMEOUT_MS = 3000;
 
+function createBehaviorNamesById(
+  behaviors: ReturnType<typeof useKeymap>["behaviors"],
+) {
+  return Object.fromEntries(
+    Array.from(behaviors.entries()).map(([behaviorId, behavior]) => [
+      String(behaviorId),
+      behavior.displayName,
+    ]),
+  );
+}
+
 export function KeymapPage() {
   const connection = useContext(ConnectionContext);
   const keyboardLayoutContext = useContext(KeyboardLayoutContext);
@@ -77,16 +88,9 @@ export function KeymapPage() {
   const keymapJsonForCopy = useMemo(() => {
     if (!keymap.keymap) return null;
 
-    const behaviorNamesById = Object.fromEntries(
-      Array.from(keymap.behaviors.entries()).map(([behaviorId, behavior]) => [
-        String(behaviorId),
-        behavior.displayName,
-      ]),
-    );
-
     return {
       ...keymap.keymap,
-      behaviorNamesById,
+      behaviorNamesById: createBehaviorNamesById(keymap.behaviors),
     };
   }, [keymap.keymap, keymap.behaviors]);
 

@@ -160,6 +160,10 @@ describe("KeymapPage", () => {
     );
   };
 
+  /**
+   * Overrides global navigator.clipboard for tests.
+   * Pass undefined to simulate an unavailable Clipboard API.
+   */
   const overrideClipboard = (
     clipboard: { writeText: jest.Mock } | undefined,
   ) => {
