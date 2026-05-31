@@ -29,11 +29,14 @@ export interface UseCustomSettingsReturn {
   isLoading: boolean;
   error: string | null;
   loadSettings: () => Promise<void>;
-  updateSetting: (
+  updateSettingMemory: (
     setting: Setting,
     value: SettingValue,
     source: number,
   ) => Promise<void>;
+  saveSubsystemSettings: (customSubsystemIndex: number) => Promise<void>;
+  discardSubsystemSettings: (customSubsystemIndex: number) => Promise<void>;
+  resetSubsystemSettings: (customSubsystemIndex: number) => Promise<void>;
   subsystemIdentifierForIndex: (index: number) => string;
 }
 
@@ -212,7 +215,7 @@ export function useCustomSettings(): UseCustomSettingsReturn {
     }
   }, [zmkApp?.state.connection, subsystemIndex, collectListSettings]);
 
-  const updateSetting = useCallback(
+  const updateSettingMemory = useCallback(
     async (setting: Setting, value: SettingValue, source: number) => {
       if (!zmkApp?.state.connection || subsystemIndex === undefined) {
         setError("Not connected to device or subsystem not found");
@@ -234,7 +237,7 @@ export function useCustomSettings(): UseCustomSettingsReturn {
                 arrayIndex,
               },
               value,
-              mode: SettingWriteMode.SETTING_WRITE_MODE_PERSIST,
+              mode: SettingWriteMode.SETTING_WRITE_MODE_MEMORY,
             },
           }),
         );
@@ -258,6 +261,75 @@ export function useCustomSettings(): UseCustomSettingsReturn {
     ],
   );
 
+  const saveSubsystemSettings = useCallback(
+    async (customSubsystemIndex: number) => {
+      await sendScopeRequest(
+        customSubsystemIndex,
+        (scope) => Request.create({ saveSettings: { scope } }),
+        "save",
+        zmkApp?.state.connection,
+        subsystemIndex,
+        callCustomRequest,
+        collectListSettings,
+        setSettings,
+        setIsLoading,
+        setError,
+      );
+    },
+    [
+      zmkApp?.state.connection,
+      subsystemIndex,
+      callCustomRequest,
+      collectListSettings,
+    ],
+  );
+
+  const discardSubsystemSettings = useCallback(
+    async (customSubsystemIndex: number) => {
+      await sendScopeRequest(
+        customSubsystemIndex,
+        (scope) => Request.create({ discardSettings: { scope } }),
+        "discard",
+        zmkApp?.state.connection,
+        subsystemIndex,
+        callCustomRequest,
+        collectListSettings,
+        setSettings,
+        setIsLoading,
+        setError,
+      );
+    },
+    [
+      zmkApp?.state.connection,
+      subsystemIndex,
+      callCustomRequest,
+      collectListSettings,
+    ],
+  );
+
+  const resetSubsystemSettings = useCallback(
+    async (customSubsystemIndex: number) => {
+      await sendScopeRequest(
+        customSubsystemIndex,
+        (scope) => Request.create({ resetSettings: { scope } }),
+        "reset",
+        zmkApp?.state.connection,
+        subsystemIndex,
+        callCustomRequest,
+        collectListSettings,
+        setSettings,
+        setIsLoading,
+        setError,
+      );
+    },
+    [
+      zmkApp?.state.connection,
+      subsystemIndex,
+      callCustomRequest,
+      collectListSettings,
+    ],
+  );
+
   useEffect(() => {
     if (subsystemIndex !== undefined && zmkApp?.state.connection) {
       void loadSettings();
@@ -272,9 +344,55 @@ export function useCustomSettings(): UseCustomSettingsReturn {
     isLoading,
     error,
     loadSettings,
-    updateSetting,
+    updateSettingMemory,
+    saveSubsystemSettings,
+    discardSubsystemSettings,
+    resetSubsystemSettings,
     subsystemIdentifierForIndex,
   };
+}
+
+async function sendScopeRequest(
+  customSubsystemIndex: number,
+  createRequest: (scope: {
+    customSubsystemIndex: number;
+    source: number;
+  }) => Request,
+  action: string,
+  connection: unknown,
+  subsystemIndex: number | undefined,
+  callCustomRequest: (request: Request) => Promise<Response>,
+  collectListSettings: () => Promise<Setting[]>,
+  setSettings: (settings: Setting[]) => void,
+  setIsLoading: (value: boolean) => void,
+  setError: (value: string | null) => void,
+) {
+  if (!connection || subsystemIndex === undefined) {
+    setError("Not connected to device or subsystem not found");
+    return;
+  }
+
+  setIsLoading(true);
+  setError(null);
+
+  try {
+    await callCustomRequest(
+      createRequest({
+        customSubsystemIndex,
+        source: CUSTOM_SETTINGS_SOURCE_ALL,
+      }),
+    );
+    setSettings(await collectListSettings());
+  } catch (err) {
+    console.error(`Failed to ${action} custom settings:`, err);
+    setError(
+      `Failed to ${action} custom settings: ${
+        err instanceof Error ? err.message : "Unknown error"
+      }`,
+    );
+  } finally {
+    setIsLoading(false);
+  }
 }
 
 function getSubsystems(value: unknown): ListedSubsystem[] {

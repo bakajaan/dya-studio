@@ -12,7 +12,10 @@ import {
   type KeycodeCategory,
   type KeycodeDefinition,
   HID_USAGE_PAGE_KEYBOARD,
+  MAX_BASIC_KEYCODE,
   createHidUsage,
+  getHidUsagePage,
+  getHidUsageCode,
   MODIFIER_FLAGS,
   NO_PARAM_VALUE,
   extractModifierFlags,
@@ -45,6 +48,11 @@ interface KeycodeValueSelectorProps {
   onChange: (value: number, shouldNotClose?: boolean) => void;
   showModifiers?: boolean;
   keyboardLayout?: KeyboardLayoutType;
+  hidUsageConstraint?: {
+    usagePage: number;
+    usageMin: number;
+    usageMax: number;
+  };
 }
 
 export function KeycodeValueSelector({
@@ -52,6 +60,7 @@ export function KeycodeValueSelector({
   onChange,
   keyboardLayout,
   showModifiers = true,
+  hidUsageConstraint,
 }: KeycodeValueSelectorProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] =
@@ -87,11 +96,18 @@ export function KeycodeValueSelector({
     }
   }, []);
   const filteredKeycodes = useMemo((): KeycodeDefinition[] => {
-    if (searchQuery.trim()) {
-      return searchKeycodes(searchQuery, keyboardLayout);
+    const keycodes = searchQuery.trim()
+      ? searchKeycodes(searchQuery, keyboardLayout)
+      : getKeycodesByCategory(selectedCategory, keyboardLayout);
+
+    if (!hidUsageConstraint) {
+      return keycodes;
     }
-    return getKeycodesByCategory(selectedCategory, keyboardLayout);
-  }, [searchQuery, selectedCategory, keyboardLayout]);
+
+    return keycodes.filter((keycode) =>
+      matchesHidUsageConstraint(keycode, hidUsageConstraint),
+    );
+  }, [searchQuery, selectedCategory, keyboardLayout, hidUsageConstraint]);
 
   const handleKeycodeSelect = useCallback(
     (keycode: KeycodeDefinition) => {
@@ -258,5 +274,22 @@ export function KeycodeValueSelector({
         </div>
       </div>
     </div>
+  );
+}
+
+function matchesHidUsageConstraint(
+  keycode: KeycodeDefinition,
+  constraint: NonNullable<KeycodeValueSelectorProps["hidUsageConstraint"]>,
+): boolean {
+  const usage =
+    keycode.code <= MAX_BASIC_KEYCODE
+      ? createHidUsage(HID_USAGE_PAGE_KEYBOARD, keycode.code)
+      : keycode.code;
+  const usagePage = getHidUsagePage(usage);
+  const usageCode = getHidUsageCode(usage);
+  return (
+    usagePage === constraint.usagePage &&
+    usageCode >= constraint.usageMin &&
+    usageCode <= constraint.usageMax
   );
 }

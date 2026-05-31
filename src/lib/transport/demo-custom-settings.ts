@@ -24,10 +24,15 @@ const RANGE_0_100: SettingConstraint = {
   },
 };
 
-const RANGE_0_31: SettingConstraint = {
-  range: {
-    min: { int32Value: 0 },
-    max: { int32Value: 31 },
+const LAYER_ID: SettingConstraint = {
+  layerId: {},
+};
+
+const KEYBOARD_HID_USAGE: SettingConstraint = {
+  hidUsage: {
+    usagePage: 0x07,
+    usageMin: 0x04,
+    usageMax: 0x73,
   },
 };
 
@@ -72,7 +77,7 @@ const TEMPLATES: DemoSettingTemplate[] = [
         value: { int32Value: source },
       },
     }),
-    constraints: [RANGE_0_31],
+    constraints: [LAYER_ID],
   },
   {
     key: "layers",
@@ -83,11 +88,20 @@ const TEMPLATES: DemoSettingTemplate[] = [
         value: { int32Value: source + 1 },
       },
     }),
-    constraints: [RANGE_0_31],
+    constraints: [LAYER_ID],
+  },
+  {
+    key: "tap_key",
+    valueForSource: () => ({ int32Value: 0x00070004 }),
+    constraints: [KEYBOARD_HID_USAGE],
   },
 ];
 
 export class CustomSettingsHandler {
+  private defaults = TEMPLATES.flatMap((template) =>
+    SOURCES.map((source) => createSetting(template, source)),
+  );
+  private persistedSettings = cloneSettings(this.defaults);
   private settings = TEMPLATES.flatMap((template) =>
     SOURCES.map((source) => createSetting(template, source)),
   );
@@ -144,9 +158,18 @@ export class CustomSettingsHandler {
             setting,
             request.writeSetting!.value!,
           ),
-          hasUnsavedValue: false,
+          hasUnsavedValue:
+            request.writeSetting!.mode === 0 ? true : setting.hasUnsavedValue,
         };
       });
+
+      if (request.writeSetting.mode === 1) {
+        this.persistedSettings = cloneSettings(this.settings);
+        this.settings = this.settings.map((setting) => ({
+          ...setting,
+          hasUnsavedValue: false,
+        }));
+      }
 
       return {
         status: {
@@ -154,6 +177,53 @@ export class CustomSettingsHandler {
           message: affectedCount > 0 ? "OK" : "No matching setting",
         },
       };
+    }
+
+    if (request.saveSettings) {
+      const scoped = this.filterSettings(request.saveSettings.scope);
+      this.persistedSettings = this.persistedSettings.map((persisted) => {
+        const current = scoped.find((setting) =>
+          sameSetting(setting, persisted),
+        );
+        return current ? { ...current, hasUnsavedValue: false } : persisted;
+      });
+      this.settings = this.settings.map((setting) =>
+        scoped.some((candidate) => sameSetting(candidate, setting))
+          ? { ...setting, hasUnsavedValue: false }
+          : setting,
+      );
+      return { status: { affectedCount: scoped.length, message: "OK" } };
+    }
+
+    if (request.discardSettings) {
+      const scoped = this.filterSettings(request.discardSettings.scope);
+      this.settings = this.settings.map((setting) => {
+        if (!scoped.some((candidate) => sameSetting(candidate, setting))) {
+          return setting;
+        }
+        return (
+          this.persistedSettings.find((persisted) =>
+            sameSetting(persisted, setting),
+          ) ?? setting
+        );
+      });
+      return { status: { affectedCount: scoped.length, message: "OK" } };
+    }
+
+    if (request.resetSettings) {
+      const scoped = this.filterSettings(request.resetSettings.scope);
+      this.settings = this.settings.map((setting) => {
+        if (!scoped.some((candidate) => sameSetting(candidate, setting))) {
+          return setting;
+        }
+        const defaultSetting = this.defaults.find((candidate) =>
+          sameSetting(candidate, setting),
+        );
+        return defaultSetting
+          ? { ...defaultSetting, hasUnsavedValue: true }
+          : setting;
+      });
+      return { status: { affectedCount: scoped.length, message: "OK" } };
     }
 
     return { error: { message: "Not implemented" } };
@@ -190,6 +260,19 @@ export class CustomSettingsHandler {
       return true;
     });
   }
+}
+
+function sameSetting(a: Setting, b: Setting): boolean {
+  return (
+    a.customSubsystemIndex === b.customSubsystemIndex &&
+    a.key === b.key &&
+    a.source === b.source &&
+    arrayIndex(a) === arrayIndex(b)
+  );
+}
+
+function cloneSettings(settings: Setting[]): Setting[] {
+  return JSON.parse(JSON.stringify(settings)) as Setting[];
 }
 
 function createSetting(template: DemoSettingTemplate, source: number): Setting {

@@ -1,17 +1,24 @@
-import { useMemo, useState } from "react";
-import { IconRefresh } from "@tabler/icons-react";
+import { useContext, useMemo, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { IconRefresh, IconRotate, IconX } from "@tabler/icons-react";
 import {
   CUSTOM_SETTINGS_SOURCE_ALL,
   type UseCustomSettingsReturn,
 } from "../hooks/useCustomSettings";
+import { useDebouncedSave } from "../hooks/useDebouncedSave";
+import { useKeymap } from "../hooks/useKeymap";
+import { KeyboardLayoutContext } from "../contexts/KeyboardLayoutContext";
+import { KeycodeValueSelector } from "./KeycodeValueSelector";
 import {
   type Setting,
   type SettingConstraint,
+  type SettingConstraintHidUsage,
   type SettingConstraintOptions,
   type SettingConstraintRange,
   type SettingScalarValue,
   type SettingValue,
 } from "../proto/cormoran/zmk/custom_settings/custom_settings";
+import { formatKeycodeWithModifiers } from "../lib/keycodes";
 
 interface CustomSettingsSectionProps {
   customSettings: UseCustomSettingsReturn;
@@ -27,6 +34,7 @@ interface CustomSettingGroup {
 interface CustomSubsystemGroup {
   id: string;
   label: string;
+  customSubsystemIndex: number;
   settings: CustomSettingGroup[];
 }
 
@@ -41,9 +49,15 @@ export function CustomSettingsSection({
     isLoading,
     error,
     loadSettings,
-    updateSetting,
+    updateSettingMemory,
+    saveSubsystemSettings,
+    discardSubsystemSettings,
+    resetSubsystemSettings,
     subsystemIdentifierForIndex,
   } = customSettings;
+  const { keymap } = useKeymap();
+  const { layout: keyboardLayout } = useContext(KeyboardLayoutContext);
+  const layers = keymap?.layers ?? [];
 
   const groupedSettings = useMemo(
     () => groupSettings(settings, subsystemIdentifierForIndex),
@@ -89,9 +103,13 @@ export function CustomSettingsSection({
                 <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
                   {subsystem.label}
                 </h4>
-                <span className="text-xs text-[var(--color-text-muted)]">
-                  {subsystem.settings.length} settings
-                </span>
+                <SubsystemActions
+                  subsystem={subsystem}
+                  isLoading={isLoading}
+                  onSave={saveSubsystemSettings}
+                  onDiscard={discardSubsystemSettings}
+                  onReset={resetSubsystemSettings}
+                />
               </div>
               <div className="space-y-3">
                 {subsystem.settings.map((group) => (
@@ -99,7 +117,9 @@ export function CustomSettingsSection({
                     key={group.id}
                     group={group}
                     isLoading={isLoading}
-                    onUpdate={updateSetting}
+                    layers={layers}
+                    keyboardLayout={keyboardLayout}
+                    onUpdate={updateSettingMemory}
                   />
                 ))}
               </div>
@@ -115,13 +135,86 @@ export function CustomSettingsSection({
   );
 }
 
+function SubsystemActions({
+  subsystem,
+  isLoading,
+  onSave,
+  onDiscard,
+  onReset,
+}: {
+  subsystem: CustomSubsystemGroup;
+  isLoading: boolean;
+  onSave: (customSubsystemIndex: number) => Promise<void>;
+  onDiscard: (customSubsystemIndex: number) => Promise<void>;
+  onReset: (customSubsystemIndex: number) => Promise<void>;
+}) {
+  const [confirmReset, setConfirmReset] = useState(false);
+  const hasChanges = subsystem.settings.some((group) =>
+    group.settings.some((setting) => setting.hasUnsavedValue),
+  );
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-[var(--color-text-muted)] mr-1">
+        {subsystem.settings.length} settings
+      </span>
+      <button
+        className="btn-ghost text-xs px-2 py-1"
+        disabled={!hasChanges || isLoading}
+        onClick={() => void onSave(subsystem.customSubsystemIndex)}
+      >
+        Save
+      </button>
+      <button
+        className="btn-ghost text-xs px-2 py-1"
+        disabled={!hasChanges || isLoading}
+        onClick={() => void onDiscard(subsystem.customSubsystemIndex)}
+      >
+        Discard
+      </button>
+      {!confirmReset ? (
+        <button
+          className="btn-ghost text-xs px-2 py-1 text-red-400"
+          disabled={isLoading}
+          onClick={() => setConfirmReset(true)}
+        >
+          Reset
+        </button>
+      ) : (
+        <div className="flex items-center gap-1">
+          <button
+            className="btn-ghost text-xs px-2 py-1"
+            onClick={() => setConfirmReset(false)}
+          >
+            Cancel
+          </button>
+          <button
+            className="px-2 py-1 rounded text-xs bg-red-500 text-white hover:bg-red-600 disabled:opacity-50"
+            disabled={isLoading}
+            onClick={() => {
+              setConfirmReset(false);
+              void onReset(subsystem.customSubsystemIndex);
+            }}
+          >
+            Confirm Reset
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CustomSettingRow({
   group,
   isLoading,
+  layers,
+  keyboardLayout,
   onUpdate,
 }: {
   group: CustomSettingGroup;
   isLoading: boolean;
+  layers: Array<{ id: number; name: string }>;
+  keyboardLayout: Parameters<typeof formatKeycodeWithModifiers>[1];
   onUpdate: (
     setting: Setting,
     value: SettingValue,
@@ -145,6 +238,9 @@ function CustomSettingRow({
   );
   const selectedScalar = scalarFromSetting(selectedSetting);
   const selectedKind = scalarValueKind(selectedScalar);
+  const layerConstraint = selectedSetting?.meta?.constraints.some(
+    (constraint) => constraint.layerId,
+  );
   const selectedValueKey = `${selectedSetting?.source ?? "none"}:${
     selectedSetting?.customSubsystemIndex ?? "none"
   }:${selectedSetting?.key ?? "none"}:${selectedArrayIndex}:${
@@ -158,6 +254,10 @@ function CustomSettingRow({
     valueDraft.key === selectedValueKey ? valueDraft.value : initialValueText;
   const setValueText = (value: string) =>
     setValueDraft({ key: selectedValueKey, value });
+  const debouncedSave = useDebouncedSave<string>({
+    delay: 500,
+    savedStatusDuration: 800,
+  });
 
   const sourceOptions = getSourceOptions(group.settings);
   const optionConstraint = getOptionsConstraint(selectedSetting);
@@ -177,13 +277,21 @@ function CustomSettingRow({
     !isHidden &&
     !validationMessage &&
     !isLoading;
+  const hasPendingChange = group.settings.some(
+    (setting) => setting.hasUnsavedValue,
+  );
 
-  const handleUpdate = async () => {
-    if (!selectedSetting || !selectedKind || validationMessage) {
+  const commitValue = async (nextText: string) => {
+    const nextValidation = validateInput(
+      nextText,
+      selectedKind,
+      selectedSetting?.meta?.constraints ?? [],
+    );
+    if (!selectedSetting || !selectedKind || nextValidation) {
       return;
     }
 
-    const scalarValue = parseScalarValue(valueText, selectedKind);
+    const scalarValue = parseScalarValue(nextText, selectedKind);
     const arrayValue = selectedSetting.value?.arrayValue;
     const value: SettingValue = arrayValue
       ? {
@@ -196,6 +304,27 @@ function CustomSettingRow({
       : scalarValue;
 
     await onUpdate(selectedSetting, value, selectedSource);
+  };
+
+  const handleInputChange = (nextText: string) => {
+    setValueText(nextText);
+    if (!selectedSetting || !selectedKind) {
+      return;
+    }
+    const nextValidation = validateInput(
+      nextText,
+      selectedKind,
+      selectedSetting.meta?.constraints ?? [],
+    );
+    if (!nextValidation) {
+      debouncedSave.setPendingValue(nextText, commitValue);
+    }
+  };
+
+  const handleImmediateChange = (nextText: string) => {
+    debouncedSave.cancel();
+    setValueText(nextText);
+    void commitValue(nextText);
   };
 
   return (
@@ -224,6 +353,11 @@ function CustomSettingRow({
                 </span>
                 <span className="font-mono text-[var(--color-text-secondary)] break-all">
                   {entry.value}
+                  {entry.hasUnsavedValue && (
+                    <span className="ml-2 text-[10px] font-sans uppercase tracking-wide text-[var(--color-electric)]">
+                      pending
+                    </span>
+                  )}
                 </span>
               </div>
             ))}
@@ -278,14 +412,32 @@ function CustomSettingRow({
 
           <div>
             <label className="text-xs text-[var(--color-text-muted)]">
-              Value
+              <span className="inline-flex items-center gap-2">
+                Value
+                {(hasPendingChange ||
+                  debouncedSave.saveStatus === "pending") && (
+                  <span className="px-1.5 py-0.5 rounded bg-[var(--color-electric)]/10 text-[var(--color-electric)] text-[10px] uppercase tracking-wide">
+                    pending
+                  </span>
+                )}
+                {debouncedSave.saveStatus === "saving" && (
+                  <span className="text-[10px] text-[var(--color-text-muted)]">
+                    updating...
+                  </span>
+                )}
+              </span>
               {renderValueInput({
                 valueText,
                 selectedKind,
                 optionConstraint,
                 rangeConstraint,
+                hidConstraint,
+                layerConstraint,
+                layers,
+                keyboardLayout,
                 isHidden,
-                onChange: setValueText,
+                onChange: handleInputChange,
+                onImmediateChange: handleImmediateChange,
               })}
             </label>
             {constraintSummary(selectedSetting) && (
@@ -306,15 +458,11 @@ function CustomSettingRow({
             )}
           </div>
 
-          <div className="flex justify-end">
-            <button
-              className="btn-electric text-sm"
-              onClick={() => void handleUpdate()}
-              disabled={!canUpdate}
-            >
-              {isLoading ? "Updating..." : "Update"}
-            </button>
-          </div>
+          {!canUpdate && validationMessage && (
+            <p className="text-[11px] text-red-400 text-right">
+              Fix the value before it can be updated.
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -326,15 +474,25 @@ function renderValueInput({
   selectedKind,
   optionConstraint,
   rangeConstraint,
+  hidConstraint,
+  layerConstraint,
+  layers,
+  keyboardLayout,
   isHidden,
   onChange,
+  onImmediateChange,
 }: {
   valueText: string;
   selectedKind: ScalarValueKind | undefined;
   optionConstraint: SettingConstraintOptions | undefined;
   rangeConstraint: SettingConstraintRange | undefined;
+  hidConstraint: SettingConstraintHidUsage | undefined;
+  layerConstraint: boolean | undefined;
+  layers: Array<{ id: number; name: string }>;
+  keyboardLayout: Parameters<typeof formatKeycodeWithModifiers>[1];
   isHidden: boolean;
   onChange: (value: string) => void;
+  onImmediateChange: (value: string) => void;
 }) {
   if (isHidden || !selectedKind) {
     return (
@@ -352,7 +510,7 @@ function renderValueInput({
       <select
         className="input-field mt-1 w-full text-sm"
         value={valueText}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => onImmediateChange(event.target.value)}
       >
         {optionConstraint.values.map((option, index) => (
           <option
@@ -371,7 +529,7 @@ function renderValueInput({
       <select
         className="input-field mt-1 w-full text-sm"
         value={valueText}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => onImmediateChange(event.target.value)}
       >
         <option value="true">true</option>
         <option value="false">false</option>
@@ -380,6 +538,37 @@ function renderValueInput({
   }
 
   if (selectedKind === "int32") {
+    if (layerConstraint) {
+      return (
+        <select
+          className="input-field mt-1 w-full text-sm"
+          value={valueText}
+          onChange={(event) => onImmediateChange(event.target.value)}
+        >
+          {layers.length > 0 ? (
+            layers.map((layer) => (
+              <option key={layer.id} value={layer.id}>
+                {layer.name || `Layer ${layer.id}`}
+              </option>
+            ))
+          ) : (
+            <option value={valueText}>Layer {valueText}</option>
+          )}
+        </select>
+      );
+    }
+
+    if (hidConstraint) {
+      return (
+        <HidUsagePicker
+          valueText={valueText}
+          hidConstraint={hidConstraint}
+          keyboardLayout={keyboardLayout}
+          onChange={onImmediateChange}
+        />
+      );
+    }
+
     return (
       <input
         className="input-field mt-1 w-full text-sm"
@@ -403,6 +592,75 @@ function renderValueInput({
   );
 }
 
+function HidUsagePicker({
+  valueText,
+  hidConstraint,
+  keyboardLayout,
+  onChange,
+}: {
+  valueText: string;
+  hidConstraint: SettingConstraintHidUsage;
+  keyboardLayout: Parameters<typeof formatKeycodeWithModifiers>[1];
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const value = Number(valueText) || 0;
+  const formatted = formatKeycodeWithModifiers(value, keyboardLayout);
+
+  return (
+    <>
+      <button
+        type="button"
+        className="input-field mt-1 w-full text-sm flex items-center justify-between text-left"
+        onClick={() => setOpen(true)}
+      >
+        <span className="truncate">{formatted.display}</span>
+        <IconRotate size={16} className="text-[var(--color-text-muted)]" />
+      </button>
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full tablet:w-[90vw] max-w-3xl h-full tablet:h-[80vh] bg-[var(--color-surface)] rounded-none tablet:rounded-xl border border-[var(--color-border)] shadow-2xl z-50 flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
+              <div>
+                <Dialog.Title className="text-base font-medium text-[var(--color-text)]">
+                  Select HID Usage
+                </Dialog.Title>
+                <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                  Page {hidConstraint.usagePage}, usage {hidConstraint.usageMin}
+                  -{hidConstraint.usageMax}
+                </p>
+              </div>
+              <Dialog.Close asChild>
+                <button
+                  className="p-2 rounded-lg hover:bg-[var(--color-border)] transition-colors"
+                  aria-label="Close HID usage picker"
+                >
+                  <IconX size={20} className="text-[var(--color-text-muted)]" />
+                </button>
+              </Dialog.Close>
+            </div>
+            <div className="flex-1 p-4 overflow-hidden">
+              <KeycodeValueSelector
+                value={value}
+                showModifiers
+                keyboardLayout={keyboardLayout}
+                hidUsageConstraint={hidConstraint}
+                onChange={(nextValue, shouldNotClose) => {
+                  onChange(`${nextValue}`);
+                  if (!shouldNotClose) {
+                    setOpen(false);
+                  }
+                }}
+              />
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
+  );
+}
+
 function groupSettings(
   settings: Setting[],
   subsystemIdentifierForIndex: (index: number) => string,
@@ -419,6 +677,7 @@ function groupSettings(
       ({
         id: subsystemId,
         label: subsystemLabel,
+        customSubsystemIndex: setting.customSubsystemIndex,
         settings: [],
       } satisfies CustomSubsystemGroup);
     subsystemMap.set(subsystemId, subsystemGroup);
@@ -488,7 +747,7 @@ function getSelectedSetting(
 
 function getValuesBySource(
   settings: Setting[],
-): { source: number; value: string }[] {
+): { source: number; value: string; hasUnsavedValue: boolean }[] {
   const bySource = new Map<number, Setting[]>();
 
   for (const setting of settings) {
@@ -502,6 +761,9 @@ function getValuesBySource(
     .map(([source, sourceSettings]) => ({
       source,
       value: formatSourceSettings(sourceSettings),
+      hasUnsavedValue: sourceSettings.some(
+        (setting) => setting.hasUnsavedValue,
+      ),
     }));
 }
 

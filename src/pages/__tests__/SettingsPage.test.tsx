@@ -1,11 +1,13 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPage } from "../SettingsPage";
 import { useSettings } from "../../hooks/useSettings";
 import { useCustomSettings } from "../../hooks/useCustomSettings";
+import { useKeymap } from "../../hooks/useKeymap";
 import type { Setting } from "../../proto/cormoran/zmk/custom_settings/custom_settings";
 
 jest.mock("../../hooks/useSettings");
+jest.mock("../../hooks/useKeymap");
 jest.mock("../../hooks/useCustomSettings", () => ({
   CUSTOM_SETTINGS_SOURCE_ALL: 0xffffffff,
   useCustomSettings: jest.fn(),
@@ -15,6 +17,7 @@ const mockUseSettings = useSettings as jest.MockedFunction<typeof useSettings>;
 const mockUseCustomSettings = useCustomSettings as jest.MockedFunction<
   typeof useCustomSettings
 >;
+const mockUseKeymap = useKeymap as jest.MockedFunction<typeof useKeymap>;
 
 const customSettings: Setting[] = [
   {
@@ -60,11 +63,17 @@ const customSettings: Setting[] = [
 ];
 
 describe("SettingsPage", () => {
-  const updateSetting = jest.fn();
+  const updateSettingMemory = jest.fn();
+  const saveSubsystemSettings = jest.fn();
+  const discardSubsystemSettings = jest.fn();
+  const resetSubsystemSettings = jest.fn();
 
   beforeEach(() => {
     jest.clearAllMocks();
-    updateSetting.mockResolvedValue(undefined);
+    updateSettingMemory.mockResolvedValue(undefined);
+    saveSubsystemSettings.mockResolvedValue(undefined);
+    discardSubsystemSettings.mockResolvedValue(undefined);
+    resetSubsystemSettings.mockResolvedValue(undefined);
 
     mockUseSettings.mockReturnValue({
       isAvailable: true,
@@ -84,9 +93,46 @@ describe("SettingsPage", () => {
       isLoading: false,
       error: null,
       loadSettings: jest.fn(),
-      updateSetting,
+      updateSettingMemory,
+      saveSubsystemSettings,
+      discardSubsystemSettings,
+      resetSubsystemSettings,
       subsystemIdentifierForIndex: (index) =>
         index === 4 ? "zmk_config_sample" : `${index}`,
+    });
+
+    mockUseKeymap.mockReturnValue({
+      keymap: {
+        layers: [
+          { id: 0, name: "Base", bindings: [] },
+          { id: 1, name: "Lower", bindings: [] },
+        ],
+        availableLayers: 2,
+      },
+      physicalLayouts: null,
+      behaviors: new Map(),
+      originalBindings: new Map(),
+      hasUnsavedChanges: false,
+      isLoading: false,
+      error: null,
+      unlockRequired: false,
+      loadKeymapData: jest.fn(),
+      setBinding: jest.fn(),
+      resetBinding: jest.fn(),
+      moveLayer: jest.fn(),
+      addLayer: jest.fn(),
+      removeLayer: jest.fn(),
+      restoreLayer: jest.fn(),
+      availableLayers: 2,
+      removedLayerIds: [],
+      saveChanges: jest.fn(),
+      discardChanges: jest.fn(),
+      setActiveLayout: jest.fn(),
+      getOriginalBinding: jest.fn(),
+      isBindingModified: jest.fn(),
+      getBehavior: jest.fn(),
+      getBindingDisplayName: jest.fn(),
+      clearUnlockRequired: jest.fn(),
     });
   });
 
@@ -105,7 +151,7 @@ describe("SettingsPage", () => {
     expect(screen.getAllByText("Peripheral 1").length).toBeGreaterThan(0);
   });
 
-  it("updates custom settings with selectable split target", async () => {
+  it("updates custom settings memory with selectable split target", async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
 
@@ -120,13 +166,51 @@ describe("SettingsPage", () => {
 
     await user.clear(valueInput);
     await user.type(valueInput, "42");
-    await user.click(screen.getByRole("button", { name: "Update" }));
 
-    expect(updateSetting).toHaveBeenCalledWith(
-      customSettings[0],
-      { int32Value: 42 },
-      0xffffffff,
+    await waitFor(() =>
+      expect(updateSettingMemory).toHaveBeenCalledWith(
+        customSettings[0],
+        { int32Value: 42 },
+        0xffffffff,
+      ),
     );
+  });
+
+  it("enables subsystem save and discard when a custom setting is pending", async () => {
+    const user = userEvent.setup();
+    mockUseCustomSettings.mockReturnValue({
+      isAvailable: true,
+      settings: [{ ...customSettings[0], hasUnsavedValue: true }],
+      isLoading: false,
+      error: null,
+      loadSettings: jest.fn(),
+      updateSettingMemory,
+      saveSubsystemSettings,
+      discardSubsystemSettings,
+      resetSubsystemSettings,
+      subsystemIdentifierForIndex: (index) =>
+        index === 4 ? "zmk_config_sample" : `${index}`,
+    });
+
+    render(<SettingsPage />);
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(saveSubsystemSettings).toHaveBeenCalledWith(4);
+
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    expect(discardSubsystemSettings).toHaveBeenCalledWith(4);
+    expect(screen.getAllByText("pending").length).toBeGreaterThan(0);
+  });
+
+  it("confirms reset before resetting subsystem settings", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(resetSubsystemSettings).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Confirm Reset" }));
+    expect(resetSubsystemSettings).toHaveBeenCalledWith(4);
   });
 
   it("shows custom settings even when the power settings subsystem is absent", () => {
