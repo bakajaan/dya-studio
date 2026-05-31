@@ -20,7 +20,7 @@ const SUBSYSTEM_IDENTIFIERS = [
 
 export const CUSTOM_SETTINGS_SOURCE_ALL = 0xffffffff;
 
-const LIST_NOTIFICATION_TIMEOUT_MS = 750;
+const LIST_NOTIFICATION_TIMEOUT_MS = 1500;
 const LIST_REQUEST_TIMEOUT_MS = 5000;
 
 export interface UseCustomSettingsReturn {
@@ -105,7 +105,6 @@ export function useCustomSettings(): UseCustomSettingsReturn {
     }
 
     const collected: Setting[] = [];
-    let expectedCount: number | undefined;
     let quietTimeout: ReturnType<typeof setTimeout> | undefined;
     let isComplete = false;
     let resolveList: () => void = () => {};
@@ -144,14 +143,7 @@ export function useCustomSettings(): UseCustomSettingsReturn {
             notification.setting.setting
           ) {
             collected.push(notification.setting.setting);
-            if (
-              expectedCount !== undefined &&
-              collected.length >= expectedCount
-            ) {
-              completeList();
-            } else {
-              scheduleQuietResolve();
-            }
+            scheduleQuietResolve();
           }
         } catch (err) {
           console.error("Failed to decode custom settings notification:", err);
@@ -160,7 +152,7 @@ export function useCustomSettings(): UseCustomSettingsReturn {
     });
 
     try {
-      const resp = await withTimeout(
+      await withTimeout(
         callCustomRequest(
           Request.create({
             listSettings: {
@@ -174,16 +166,13 @@ export function useCustomSettings(): UseCustomSettingsReturn {
         LIST_REQUEST_TIMEOUT_MS,
         "Custom settings list request timed out",
       );
-      expectedCount = resp.status?.affectedCount;
 
-      if (expectedCount !== undefined && collected.length >= expectedCount) {
-        completeList();
-      } else {
-        scheduleQuietResolve();
-      }
+      // Split peripheral settings can arrive after the central response.
+      // For ALL-scope list requests, wait for notifications to settle.
+      scheduleQuietResolve();
 
       await listComplete;
-      return sortSettings(collected);
+      return sortSettings(dedupeSettings(collected));
     } finally {
       unsubscribe();
       if (quietTimeout) {
@@ -422,6 +411,25 @@ function sortSettings(settings: Setting[]): Setting[] {
       (a.value?.arrayValue?.index ?? -1) - (b.value?.arrayValue?.index ?? -1) ||
       sourceSortValue(a.source) - sourceSortValue(b.source),
   );
+}
+
+function dedupeSettings(settings: Setting[]): Setting[] {
+  const bySettingRef = new Map<string, Setting>();
+
+  for (const setting of settings) {
+    bySettingRef.set(settingListKey(setting), setting);
+  }
+
+  return [...bySettingRef.values()];
+}
+
+function settingListKey(setting: Setting): string {
+  return [
+    setting.customSubsystemIndex,
+    setting.key,
+    setting.source,
+    setting.value?.arrayValue?.index ?? "",
+  ].join(":");
 }
 
 function sourceSortValue(source: number): number {
