@@ -30,6 +30,11 @@ import {
   PHYSICAL_LAYOUTS_IDENTIFIER,
 } from "./demo-physical-layouts";
 import {
+  CustomSettingsHandler,
+  CUSTOM_SETTINGS_IDENTIFIER,
+  CUSTOM_SETTINGS_SAMPLE_IDENTIFIER,
+} from "./demo-custom-settings";
+import {
   Request as BLERequest,
   Response as BLEResponse,
 } from "../../proto/zmk/ble_management/ble_management";
@@ -53,6 +58,10 @@ import {
   Request as PhysicalLayoutsRequest,
   Response as PhysicalLayoutsResponse,
 } from "../../proto/zmk/physical_layouts/physical_layouts";
+import {
+  Request as CustomSettingsRequest,
+  Response as CustomSettingsResponse,
+} from "../../proto/cormoran/zmk/custom_settings/custom_settings";
 import {
   ANSI60,
   ORTHO,
@@ -161,6 +170,7 @@ class Keyboard {
   private runtimeInputProcessorHandler = new RuntimeInputProcessorHandler();
   private runtimeSensorRotateHandler = new RuntimeSensorRotateHandler();
   private physicalLayoutsHandler = new PhysicalLayoutsHandler();
+  private customSettingsHandler = new CustomSettingsHandler();
 
   // Custom subsystems registry
   private readonly BLE_SUBSYSTEM_INDEX = 0;
@@ -169,6 +179,8 @@ class Keyboard {
   private readonly RUNTIME_INPUT_PROCESSOR_SUBSYSTEM_INDEX = 3;
   private readonly RUNTIME_SENSOR_ROTATE_SUBSYSTEM_INDEX = 4;
   private readonly PHYSICAL_LAYOUTS_SUBSYSTEM_INDEX = 5;
+  private readonly CUSTOM_SETTINGS_SUBSYSTEM_INDEX = 6;
+  private readonly CUSTOM_SETTINGS_SAMPLE_SUBSYSTEM_INDEX = 7;
 
   private customSubsystems = [
     {
@@ -199,6 +211,16 @@ class Keyboard {
     {
       index: this.PHYSICAL_LAYOUTS_SUBSYSTEM_INDEX,
       identifier: PHYSICAL_LAYOUTS_IDENTIFIER,
+      uiUrl: [],
+    },
+    {
+      index: this.CUSTOM_SETTINGS_SUBSYSTEM_INDEX,
+      identifier: CUSTOM_SETTINGS_IDENTIFIER,
+      uiUrl: [],
+    },
+    {
+      index: this.CUSTOM_SETTINGS_SAMPLE_SUBSYSTEM_INDEX,
+      identifier: CUSTOM_SETTINGS_SAMPLE_IDENTIFIER,
       uiUrl: [],
     },
   ];
@@ -413,6 +435,17 @@ class Keyboard {
         } catch (e) {
           console.error("Physical Layouts subsystem error:", e);
         }
+      } else if (subsystemIndex === this.CUSTOM_SETTINGS_SUBSYSTEM_INDEX) {
+        // Custom Settings
+        try {
+          const customSettingsReq = CustomSettingsRequest.decode(data);
+          const customSettingsResp =
+            this.customSettingsHandler.process(customSettingsReq);
+          responseData =
+            CustomSettingsResponse.encode(customSettingsResp).finish();
+        } catch (e) {
+          console.error("Custom Settings subsystem error:", e);
+        }
       }
 
       if (responseData) {
@@ -490,6 +523,21 @@ class Keyboard {
             custom: {
               customNotification: {
                 subsystemIndex: this.RUNTIME_SENSOR_ROTATE_SUBSYSTEM_INDEX,
+                payload: payload,
+              },
+            },
+          },
+        }).finish(),
+      );
+    });
+
+    this.customSettingsHandler.notify((payload: Uint8Array) => {
+      callback(
+        Response.encode({
+          notification: {
+            custom: {
+              customNotification: {
+                subsystemIndex: this.CUSTOM_SETTINGS_SUBSYSTEM_INDEX,
                 payload: payload,
               },
             },

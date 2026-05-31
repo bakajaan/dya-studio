@@ -6,6 +6,8 @@ import {
   IconAlertTriangleFilled,
 } from "@tabler/icons-react";
 import { useSettings } from "../hooks/useSettings";
+import { useCustomSettings } from "../hooks/useCustomSettings";
+import { CustomSettingsSection } from "../components/CustomSettingsSection";
 
 // Helper to format milliseconds to human readable
 function formatMs(ms: number): string {
@@ -221,6 +223,7 @@ function TimeDropdown({ value, onChange, presets }: TimeDropdownProps) {
 export function SettingsPage() {
   const { isAvailable, devices, isLoading, error, setActivitySettings } =
     useSettings();
+  const customSettings = useCustomSettings();
   // Track if user has edited the form
   const [hasEdits, setHasEdits] = useState(false);
   const [editedIdleTimeout, setEditedIdleTimeout] = useState<number>(0);
@@ -275,27 +278,30 @@ export function SettingsPage() {
           </div>
         </div>
 
-        {!isAvailable && !isLoading && !error && (
-          <div className="mb-6 p-4 rounded-lg bg-[var(--color-border)] border border-[var(--color-border-hover)] flex items-start gap-3">
-            <div className="p-2">
-              <IconAlertTriangleFilled size={24} className="text-red-500" />
+        {!isAvailable &&
+          !customSettings.isAvailable &&
+          !isLoading &&
+          !error && (
+            <div className="mb-6 p-4 rounded-lg bg-[var(--color-border)] border border-[var(--color-border-hover)] flex items-start gap-3">
+              <div className="p-2">
+                <IconAlertTriangleFilled size={24} className="text-red-500" />
+              </div>
+              <p className="text-sm text-[var(--color-text-muted)]">
+                Settings RPC subsystem is not available for your keyboard.
+                <br />
+                Make sure your firmware has the
+                <a
+                  href="https://github.com/cormoran/zmk-module-settings-rpc"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[var(--color-electric)] underline mx-1"
+                >
+                  cormoran/zmk-module-settings-rpc
+                </a>
+                enabled.
+              </p>
             </div>
-            <p className="text-sm text-[var(--color-text-muted)]">
-              Settings RPC subsystem is not available for your keyboard.
-              <br />
-              Make sure your firmware has the
-              <a
-                href="https://github.com/cormoran/zmk-module-settings-rpc"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[var(--color-electric)] underline mx-1"
-              >
-                cormoran/zmk-module-settings-rpc
-              </a>
-              enabled.
-            </p>
-          </div>
-        )}
+          )}
 
         {/* Error Display */}
         {error && (
@@ -305,7 +311,7 @@ export function SettingsPage() {
         )}
 
         {/* Loading State */}
-        {isLoading && !centralSettings && (
+        {isLoading && !centralSettings && !customSettings.isAvailable && (
           <div className="glass-card p-6">
             <p className="text-sm text-[var(--color-text-muted)]">
               Loading settings...
@@ -314,79 +320,85 @@ export function SettingsPage() {
         )}
 
         {/* Settings Groups */}
-        {centralSettings ? (
+        {centralSettings || customSettings.isAvailable ? (
           <div className="space-y-6">
             {/* Power Management */}
-            <div className="glass-card p-6">
-              <h3 className="text-sm font-medium text-[var(--color-text)] mb-4">
-                Power Management
-              </h3>
+            {centralSettings && (
+              <div className="glass-card p-6">
+                <h3 className="text-sm font-medium text-[var(--color-text)] mb-4">
+                  Power Management
+                </h3>
 
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-[var(--color-text-secondary)]">
-                      Idle Timeout
-                    </p>
-                    <p className="text-xs text-[var(--color-text-muted)]">
-                      Time before keyboard enters idle mode
-                    </p>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-[var(--color-text-secondary)]">
+                        Idle Timeout
+                      </p>
+                      <p className="text-xs text-[var(--color-text-muted)]">
+                        Time before keyboard enters idle mode
+                      </p>
+                    </div>
+                    <TimeDropdown
+                      value={idleTimeout}
+                      onChange={handleIdleChange}
+                      presets={IDLE_PRESETS}
+                    />
                   </div>
-                  <TimeDropdown
-                    value={idleTimeout}
-                    onChange={handleIdleChange}
-                    presets={IDLE_PRESETS}
-                  />
-                </div>
 
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-[var(--color-text-secondary)]">
-                      Sleep Timeout
-                    </p>
-                    <p className="text-xs text-[var(--color-text-muted)]">
-                      Time before entering deep sleep
-                    </p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-[var(--color-text-secondary)]">
+                        Sleep Timeout
+                      </p>
+                      <p className="text-xs text-[var(--color-text-muted)]">
+                        Time before entering deep sleep
+                      </p>
+                    </div>
+                    <TimeDropdown
+                      value={sleepTimeout}
+                      onChange={handleSleepChange}
+                      presets={SLEEP_PRESETS}
+                    />
                   </div>
-                  <TimeDropdown
-                    value={sleepTimeout}
-                    onChange={handleSleepChange}
-                    presets={SLEEP_PRESETS}
-                  />
+
+                  <div className="flex justify-end pt-2">
+                    <button
+                      className="btn-electric text-sm"
+                      onClick={handleSaveSettings}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? "Saving..." : "Apply to All Devices"}
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex justify-end pt-2">
-                  <button
-                    className="btn-electric text-sm"
-                    onClick={handleSaveSettings}
-                    disabled={isLoading}
-                  >
-                    {isLoading ? "Saving..." : "Apply to All Devices"}
-                  </button>
-                </div>
+                {/* Show all devices status - moved after inputs */}
+                {devices.length > 0 && (
+                  <div className="mt-6 p-4 rounded-lg bg-[var(--color-border)]">
+                    <p className="text-xs font-medium text-[var(--color-text-muted)] mb-2">
+                      Current Settings by Device:
+                    </p>
+                    <div className="space-y-1">
+                      {devices.map((device) => (
+                        <div
+                          key={device.sourceId}
+                          className="text-xs text-[var(--color-text-secondary)]"
+                        >
+                          <span className="font-mono">
+                            {device.deviceName}:
+                          </span>{" "}
+                          Idle: {formatMs(device.idleMs)}, Sleep:{" "}
+                          {formatMs(device.sleepMs)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
+            )}
 
-              {/* Show all devices status - moved after inputs */}
-              {devices.length > 0 && (
-                <div className="mt-6 p-4 rounded-lg bg-[var(--color-border)]">
-                  <p className="text-xs font-medium text-[var(--color-text-muted)] mb-2">
-                    Current Settings by Device:
-                  </p>
-                  <div className="space-y-1">
-                    {devices.map((device) => (
-                      <div
-                        key={device.sourceId}
-                        className="text-xs text-[var(--color-text-secondary)]"
-                      >
-                        <span className="font-mono">{device.deviceName}:</span>{" "}
-                        Idle: {formatMs(device.idleMs)}, Sleep:{" "}
-                        {formatMs(device.sleepMs)}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            <CustomSettingsSection customSettings={customSettings} />
 
             {/* Danger Zone
             <div className="glass-card p-6 border-red-500/20">
