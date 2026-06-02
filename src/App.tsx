@@ -44,12 +44,6 @@ const tabs: TabItem[] = [
     content: <KeymapPage />,
   },
   {
-    id: "import-export",
-    label: "Import/Export",
-    icon: <IconCloudDownload size={18} />,
-    content: <ImportExportPage />,
-  },
-  {
     id: "trackball",
     label: "Trackball",
     icon: <IconPointer size={18} />,
@@ -78,6 +72,12 @@ const tabs: TabItem[] = [
     label: "Subsystems",
     icon: <IconPuzzle size={18} />,
     content: <CustomSubsystemsPage />,
+  },
+  {
+    id: "import-export",
+    label: "Import/Export",
+    icon: <IconCloudDownload size={18} />,
+    content: <ImportExportPage />,
   },
 ];
 
