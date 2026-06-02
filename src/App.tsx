@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   IconBattery2,
   IconBluetooth,
+  IconCloudDownload,
   IconHome,
   IconKeyboard,
   IconPointer,
@@ -27,6 +28,7 @@ import { KeymapPage } from "./pages/KeymapPage";
 import { TrackballPage } from "./pages/TrackballPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { CustomSubsystemsPage } from "./pages/CustomSubsystemsPage";
+import { ImportExportPage } from "./pages/ImportExportPage";
 
 const tabs: TabItem[] = [
   {
@@ -40,6 +42,12 @@ const tabs: TabItem[] = [
     label: "Keymap",
     icon: <IconKeyboard size={18} />,
     content: <KeymapPage />,
+  },
+  {
+    id: "import-export",
+    label: "Import/Export",
+    icon: <IconCloudDownload size={18} />,
+    content: <ImportExportPage />,
   },
   {
     id: "trackball",
@@ -87,7 +95,17 @@ function App() {
 
 function AppContent() {
   const connection = useContext(ConnectionContext);
-  const [activeTab, setActiveTab] = useState("home");
+  const [activeTab, setActiveTab] = useState(() => {
+    const search = new URLSearchParams(window.location.search);
+    const requestedTab = search.get("tab");
+    if (requestedTab && tabs.some((tab) => tab.id === requestedTab)) {
+      return requestedTab;
+    }
+    if (search.has("code") || search.has("error")) {
+      return "import-export";
+    }
+    return "home";
+  });
 
   const setActiveTabWithTracking = useCallback(
     (tabId: string) => {
@@ -98,6 +116,9 @@ function AppContent() {
           page_path: `/${tabId}`,
         });
       }
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", tabId);
+      window.history.replaceState({}, "", url);
       setActiveTab(tabId);
     },
     [setActiveTab],

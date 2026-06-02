@@ -18,6 +18,10 @@
   },
   "dependencies": {
     "@cormoran/zmk-studio-react-hook": "github:cormoran/react-zmk-studio",
+    "@keyboard-hub/abyss-client": "file:../../../../Program/src/github.com/cormoran/keyboard-abyss/packages/abyss-client",
+    "@keyboard-hub/adapter-common": "file:../../../../Program/src/github.com/cormoran/keyboard-abyss/packages/adapter-common",
+    "@keyboard-hub/adapter-zmk": "file:../../../../Program/src/github.com/cormoran/keyboard-abyss/packages/adapter-zmk",
+    "@keyboard-hub/shared": "file:../../../../Program/src/github.com/cormoran/keyboard-abyss/packages/shared",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-switch": "^1.2.6",
     "@radix-ui/react-tabs": "^1.1.13",
