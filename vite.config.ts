@@ -29,6 +29,7 @@ export default defineConfig(({ mode }) => {
       htmlEnvVarReplacePlugin({
         VITE_GOOGLE_ANALYTICS_ID:
           env.VITE_GOOGLE_ANALYTICS_ID || "G-32NGG9Y4BQ",
+        VITE_ROBOTS: env.VITE_ROBOTS || "noindex, nofollow",
       }),
     ],
   };
