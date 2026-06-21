@@ -1,12 +1,12 @@
 /**
  * KeycodeSelector Component
  *
- * A modal dialog for selecting behaviors and configuring parameters.
+ * A sheet-style dialog for selecting behaviors and configuring parameters.
  * Behavior-first approach: select behavior, then configure parameters.
  * Supports various parameter types with dedicated UI selectors.
  *
  * Features:
- * - Close on select: Automatically close the dialog after selecting the last parameter
+ * - Close on select: Automatically close the sheet after selecting the last parameter
  *   (setting is persisted in localStorage)
  */
 import { useState, useMemo, useCallback, useEffect } from "react";
@@ -598,8 +598,8 @@ export function KeycodeSelector({
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full tablet:w-[90vw] max-w-4xl h-full tablet:h-[85vh] bg-[var(--color-surface)] rounded-none tablet:rounded-xl border border-[var(--color-border)] shadow-2xl z-50 flex flex-col overflow-hidden">
+        <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm tablet:bg-transparent tablet:backdrop-blur-0 z-50" />
+        <Dialog.Content className="keycode-selector-sheet fixed inset-x-0 bottom-0 w-full h-full tablet:h-[50vh] bg-[var(--color-surface)] rounded-none tablet:rounded-t-xl border border-[var(--color-border)] shadow-2xl z-50 flex flex-col overflow-hidden">
           {/* Header with Cancel Button */}
           <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
             <Dialog.Title className="text-lg font-medium text-[var(--color-text)] flex items-center gap-2">

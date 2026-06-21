@@ -1,4 +1,11 @@
-import { useState, useContext, useCallback, useMemo, useEffect } from "react";
+import {
+  useState,
+  useContext,
+  useCallback,
+  useMemo,
+  useEffect,
+  useRef,
+} from "react";
 import {
   IconKeyboard,
   IconDeviceFloppy,
@@ -34,6 +41,7 @@ export function KeymapPage() {
   const physicalLayoutModules = usePhysicalLayoutModules();
   const sensorRotate = useRuntimeSensorRotate();
   const inputStream = useInputStream();
+  const pageRef = useRef<HTMLDivElement>(null);
 
   // Local UI state
   const [selectedLayerIndex, setSelectedLayerIndex] = useState(0);
@@ -68,6 +76,43 @@ export function KeymapPage() {
     if (selectedKeyPosition === null || !currentLayer) return null;
     return currentLayer.bindings[selectedKeyPosition] ?? null;
   }, [selectedKeyPosition, currentLayer]);
+
+  const scrollSelectedKeyIntoPreview = useCallback((keyPosition: number) => {
+    const pageElement = pageRef.current;
+    if (!pageElement) return;
+
+    const selectedKeyElement = pageElement.querySelector<HTMLElement>(
+      `[data-key-position="${keyPosition}"]`,
+    );
+    if (!selectedKeyElement) return;
+
+    const isWideViewport =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(min-width: 768px)").matches
+        : window.innerWidth >= 768;
+    if (!isWideViewport) return;
+
+    const pageRect = pageElement.getBoundingClientRect();
+    const keyRect = selectedKeyElement.getBoundingClientRect();
+    const sheetTop = window.innerHeight * 0.5;
+    const visibleTop = Math.max(pageRect.top, 0);
+    const visibleBottom = Math.min(pageRect.bottom, sheetTop);
+
+    if (visibleBottom <= visibleTop) return;
+
+    const targetCenterY = visibleTop + (visibleBottom - visibleTop) / 2;
+    const keyCenterY = keyRect.top + keyRect.height / 2;
+    const nextScrollTop = pageElement.scrollTop + keyCenterY - targetCenterY;
+
+    if (typeof pageElement.scrollTo === "function") {
+      pageElement.scrollTo({
+        top: Math.max(0, nextScrollTop),
+        behavior: "smooth",
+      });
+    } else {
+      pageElement.scrollTop = Math.max(0, nextScrollTop);
+    }
+  }, []);
 
   // Handle key click
   const handleKeyClick = useCallback((keyPosition: number) => {
@@ -196,8 +241,18 @@ export function KeymapPage() {
     setSelectedLayerIndex(inputStream.activeLayerIndex);
   }, [inputStream.activeLayerIndex, keymap.keymap?.layers]);
 
+  useEffect(() => {
+    if (!showKeycodeSelector || selectedKeyPosition === null) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      scrollSelectedKeyIntoPreview(selectedKeyPosition);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [scrollSelectedKeyIntoPreview, selectedKeyPosition, showKeycodeSelector]);
+
   return (
-    <div className="p-6 h-full overflow-auto">
+    <div ref={pageRef} className="p-6 h-full overflow-auto">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="flex flex-col tablet:flex-row tablet:items-center gap-3 mb-4">

@@ -50,6 +50,7 @@ interface PhysicalKeyProps {
 }
 
 export function PhysicalKey({
+  keyPosition,
   attrs,
   isModified,
   displayName,
@@ -102,6 +103,7 @@ export function PhysicalKey({
   // Key content
   const keyContent = (
     <div
+      data-key-position={keyPosition}
       className={`
         absolute rounded-lg border cursor-pointer transition-all duration-150
         flex flex-col items-center justify-center p-1.5 overflow-hidden
