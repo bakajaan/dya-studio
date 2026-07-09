@@ -17,7 +17,7 @@ const config: Config = {
     "^@cormoran/zmk-studio-react-hook/testing$":
       "<rootDir>/node_modules/@cormoran/zmk-studio-react-hook/lib/testing/index.js",
     "^@cormoran/zmk-studio-react-hook$":
-      "<rootDir>/node_modules/@cormoran/zmk-studio-react-hook/lib/index.js",
+      "<rootDir>/src/__mocks__/zmkHookShim.ts",
     // Mock CSS imports
     "\\.(css|less|scss|sass)$": "identity-obj-proxy",
     "\\.(jpg|jpeg|png|gif|svg)$": "<rootDir>/src/__mocks__/fileMock.ts",
