@@ -39,8 +39,12 @@ describe("useCustomSubsystem timeout wrapper", () => {
 
     const decoded = await result.current.call?.({ foo: 1 });
     expect(encode).toHaveBeenCalledWith({ foo: 1 });
+    // lastPacketMs is pinned to undefined so the library uses a fixed-deadline
+    // timeout, not a traffic-resettable inactivity window that could hang the
+    // call (and its loading indicator) forever.
     expect(baseCallRPC).toHaveBeenCalledWith(new Uint8Array([9]), {
       timeout: DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS,
+      lastPacketMs: undefined,
     });
     expect(decode).toHaveBeenCalledWith(responsePayload);
     expect(decoded).toEqual({ decoded: true });
@@ -50,6 +54,7 @@ describe("useCustomSubsystem timeout wrapper", () => {
     await result.current.callRPC(payload);
     expect(baseCallRPC).toHaveBeenCalledWith(payload, {
       timeout: DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS,
+      lastPacketMs: undefined,
     });
   });
 
@@ -72,6 +77,7 @@ describe("useCustomSubsystem timeout wrapper", () => {
     await result.current.call?.({ foo: 1 }, { timeout: 1234 });
     expect(baseCallRPC).toHaveBeenCalledWith(new Uint8Array([9]), {
       timeout: 1234,
+      lastPacketMs: undefined,
     });
   });
 

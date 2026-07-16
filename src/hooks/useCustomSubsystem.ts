@@ -1,18 +1,29 @@
 /**
  * App-wide wrapper around `@cormoran/zmk-studio-react-hook`'s
- * `useCustomSubsystem` that raises the per-RPC timeout for every custom
- * subsystem.
+ * `useCustomSubsystem` that gives every custom subsystem a generous *fixed*
+ * per-RPC timeout.
  *
- * Custom-subsystem calls are wrapped in a `withTimeout` (the official
- * `call_rpc` is not), defaulting to 5s. Over slow BLE a single call can exceed
- * that; when it does, the timed-out call abandons the shared RPC mutex
- * mid-read, desyncing the response stream and cascading into "No response"
- * errors across the app. 5s is simply too tight for BLE, so every custom
- * subsystem gets a generous default here. Callers may still pass an explicit
- * `timeout` to override it.
+ * Custom-subsystem calls are wrapped in a timeout (the official `call_rpc` is
+ * not), defaulting to 5s. Over slow BLE a single call can exceed that; when it
+ * does, the timed-out call abandons the shared RPC mutex mid-read, desyncing
+ * the response stream and cascading into "No response" errors across the app.
+ * 5s is simply too tight for BLE, so every custom subsystem gets a generous
+ * default here. Callers may still pass an explicit `timeout` to override it.
+ *
+ * We also pin `lastPacketMs: undefined` on every call. The library otherwise
+ * injects the connection's global last-packet timestamp, which turns the
+ * timeout into a *sliding inactivity window* that resets on **any** transport
+ * byte — not just this call's response. With unrelated traffic flowing (RPC
+ * debug/log streaming, input-event notifications, other subsystems), a request
+ * the device never actually answers keeps having its window pushed out and so
+ * *never times out*: the awaiting hook's `finally` never runs and its loading
+ * indicator spins forever. Forcing `lastPacketMs: undefined` selects the
+ * library's fixed-deadline `withTimeout`, so the call is guaranteed to settle
+ * (resolve or reject) within `timeout` ms and the timeout is reflected to the
+ * UI regardless of background chatter.
  *
  * All app hooks should import `useCustomSubsystem` from here rather than from
- * the library directly, so the raised timeout applies uniformly.
+ * the library directly, so this uniform timeout behavior applies everywhere.
  */
 import { useCallback } from "react";
 import {
@@ -25,6 +36,34 @@ import { logRpc } from "../lib/rpcLogging";
 
 /** Default per-RPC timeout (ms) applied to every custom-subsystem call. */
 export const DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS = 30_000;
+
+/**
+ * Options accepted by the library's `callRPC`. Its public type only exposes
+ * `timeout`, but the runtime also honors `lastPacketMs` (it injects the
+ * connection's global last-packet clock by default). We set it explicitly to
+ * `undefined` — see the file header for why — which requires naming the field
+ * the public type omits.
+ */
+type BaseCallRpcOptions = {
+  timeout?: number;
+  lastPacketMs?: (() => number) | undefined;
+};
+
+/**
+ * Build the options passed to the library's `callRPC` for every app call:
+ * a generous fixed timeout, `lastPacketMs` pinned to `undefined` so the timeout
+ * is a fixed deadline rather than a traffic-resettable inactivity window, and
+ * any caller overrides applied last. Typed as a variable (not an inline
+ * literal) so it stays assignable to the library's narrower public param type
+ * despite naming `lastPacketMs`.
+ */
+function baseCallOptions(options?: { timeout?: number }): BaseCallRpcOptions {
+  return {
+    timeout: DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS,
+    lastPacketMs: undefined,
+    ...options,
+  };
+}
 
 export function useCustomSubsystem(
   identifier: string,
@@ -53,11 +92,7 @@ export function useCustomSubsystem<TReq, TRes>(
       logRpc(
         `custom:${identifier}`,
         payload,
-        () =>
-          baseCallRPC(payload, {
-            timeout: DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS,
-            ...options,
-          }),
+        () => baseCallRPC(payload, baseCallOptions(options)),
         {
           request: () => payload.byteLength,
           response: (res) => res?.byteLength,
@@ -78,10 +113,10 @@ export function useCustomSubsystem<TReq, TRes>(
         `custom:${identifier}`,
         request,
         async () => {
-          const responsePayload = await baseCallRPC(payload, {
-            timeout: DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS,
-            ...options,
-          });
+          const responsePayload = await baseCallRPC(
+            payload,
+            baseCallOptions(options),
+          );
           responseBytes = responsePayload?.byteLength;
           return responsePayload === null
             ? null
