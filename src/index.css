@@ -109,6 +109,16 @@
   }
 }
 
+/* Hide scrollbar while keeping the element scrollable (used by the tab row) */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* Custom component styles */
 .glass-card {
   background: var(--glass-bg);

@@ -21,9 +21,8 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { LanguageProvider } from "./contexts/LanguageContext";
 import { KeyboardLayoutProvider } from "./contexts/KeyboardLayoutProvider";
 import { StudioUnlockProvider } from "./contexts/StudioUnlockContext";
-import { TabNavigation } from "./components/TabNavigation";
-import type { TabItem } from "./components/TabNavigation";
 import { AppLayout } from "./layouts/AppLayout";
+import type { TabItem } from "./layouts/AppLayout";
 import { HomePage } from "./pages/HomePage";
 import { ConnectionPage } from "./pages/ConnectionPage";
 import { KeymapPage } from "./pages/KeymapPage";
@@ -177,18 +176,15 @@ function AppContent() {
           className="h-screen"
         >
           <AppLayout
+            tabs={tabs}
+            activeTab={activeTab}
+            onTabChange={setActiveTabWithTracking}
             isConnected={connection.isConnected}
             deviceName={connection.deviceName}
             onConnect={connection.onConnect}
             onDisconnect={connection.onDisconnect}
             isConnecting={connection.isLoading}
-          >
-            <TabNavigation
-              tabs={tabs}
-              activeTab={activeTab}
-              onTabChange={setActiveTabWithTracking}
-            />
-          </AppLayout>
+          />
         </motion.div>
       )}
 
