@@ -45,10 +45,14 @@ export function AppLayout({
       onValueChange={onTabChange}
       className="flex flex-col h-screen bg-gradient-dark"
     >
-      {/* Unified header: brand + tabs + controls on a single row */}
-      <header className="flex items-stretch h-14 pl-3 pr-3 sm:pl-6 sm:pr-4 gap-2 sm:gap-4 border-b border-[var(--color-border)] bg-[var(--color-surface)]/80 backdrop-blur-sm transition-colors duration-300">
+      {/*
+       * Header. On tablet+ everything shares one row (brand | tabs | controls).
+       * On mobile it wraps into the original two-row layout: brand + controls
+       * on top, and the full-width tab row below.
+       */}
+      <header className="flex flex-wrap tablet:flex-nowrap items-center tablet:items-stretch justify-between gap-x-2 sm:gap-x-4 px-3 sm:px-6 pt-2 tablet:pt-0 tablet:h-14 border-b border-[var(--color-border)] bg-[var(--color-surface)]/80 backdrop-blur-sm transition-colors duration-300">
         {/* Logo & Brand */}
-        <div className="flex items-center gap-3 flex-shrink-0">
+        <div className="order-1 flex items-center gap-3 flex-shrink-0">
           <DyaLogo className="w-7 h-7 sm:w-8 sm:h-8 [&_polygon]:fill-[var(--color-text)]" />
           <div className="hidden desktop:flex items-center gap-2">
             <span className="text-lg font-light tracking-widest text-[var(--color-text)]">
@@ -60,8 +64,12 @@ export function AppLayout({
           </div>
         </div>
 
-        {/* Tabs (scrollable so they never push out the controls) */}
-        <Tabs.List className="flex-1 min-w-0 flex items-stretch justify-start gap-1 overflow-x-auto scrollbar-none">
+        {/*
+         * Tabs. Scrollable so they never push out the controls. On mobile this
+         * becomes its own full-width row (order-3) separated by a top border;
+         * on tablet+ it sits inline between the brand and the controls.
+         */}
+        <Tabs.List className="order-3 tablet:order-2 w-full tablet:w-auto tablet:flex-1 tablet:min-w-0 mt-2 tablet:mt-0 border-t tablet:border-t-0 border-[var(--color-border)] flex items-stretch justify-start gap-1 overflow-x-auto scrollbar-none">
           {tabs.map((tab) => (
             <Tabs.Trigger
               key={tab.id}
@@ -76,7 +84,7 @@ export function AppLayout({
         </Tabs.List>
 
         {/* Connection Status & Toggles */}
-        <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+        <div className="order-2 tablet:order-3 flex items-center gap-2 sm:gap-3 flex-shrink-0">
           {isConnected ? (
             <>
               <div className="hidden tablet:flex items-center gap-2">
