@@ -82,8 +82,66 @@ DEVICE_NAME=Renode \
 # add e.g. `tests/keymap.spec.ts` to run a single spec; E2E_DEBUG=1 for logs.
 ```
 
-## Adding a DUT (e.g. a real dya2 build)
+### `dya2-unlocked` — the real dya2 trackball DUT (experimental)
+
+The real dya2 keyboard's central image, built from
+[cormoran/zmk-keyboard-dya2](https://github.com/cormoran/zmk-keyboard-dya2)
+(branch `support-new-zmk-modules`). It is a split **central** advertising name
+**"DYA2"**, runs Studio over USB CDC, boots **unlocked**, and carries the
+PMW3610 trackball on its own SPI0.
+
+```bash
+git clone -b support-new-zmk-modules https://github.com/cormoran/zmk-keyboard-dya2
+cd zmk-keyboard-dya2
+west init -l . --mf config/west-workspace.yml   # pins cormoran/zmk main+dya + ~20 feature modules
+west update --narrow
+west zephyr-export
+west zmk-build config -af right_trackball_studio_unlocked -d build
+# -> build/right_trackball_studio_unlocked/zephyr/zmk.elf   (DEVICE_NAME=DYA2)
+```
+
+Confirm unlocked: `.config` has `# CONFIG_ZMK_STUDIO_LOCKING is not set`,
+`CONFIG_ZMK_KEYBOARD_NAME="DYA2"`, `CONFIG_PMW3610=y`.
+
+Run it on the vendored USB+PMW3610 Renode platform (adds the simulated
+trackball so the Trackball tab / pointer motion is exercisable):
+
+```bash
+cd ..                      # e2e/renode
+ZMK_WC_RENODE_LIB=/path/to/zmk-west-commands/scripts/lib/renode \
+DEVICE_NAME=DYA2 RENODE_PLATFORM=dya2 \
+  bash run-local.sh /path/to/build/right_trackball_studio_unlocked/zephyr/zmk.elf \
+  tests/common tests/dya2
+```
+
+`RENODE_PLATFORM=dya2` makes `renode_serve.py` boot
+`platforms/xiao_nrf52840_usb_pmw3610.repl` (the harness USB real-binary platform
+merged with the PMW3610 trackball on SPIM0 + the LATCH-aware gpio1). Inject
+pointer motion over the monitor: `sysbus.spi0.trackball QueueMotion <dx> <dy>`.
+
+> **Known blocker (why this DUT is `experimental` in CI).** The real dya2 image
+> does **not** complete USB enumeration in Renode, so dya-studio cannot connect
+> to it yet. The device ACKs `SET_ADDRESS` (handled at ISR level by the nrfx
+> USBD driver) but never answers `GET_DESCRIPTOR(CONFIGURATION)` /
+> `SET_CONFIGURATION` — the Zephyr USB device work-queue thread never services
+> control transfers. The identical harness/platform enumerates the official DUT
+> fully (166-byte config descriptor, CDC wired), so it is the dya2 **image**,
+> not the platform or the trackball model (it fails identically on the plain USB
+> platform _and_ the combined trackball platform, which loads spi0 + PMW3610
+> correctly). dya2 is a heavy dual-transport (BLE central + wired) split
+> **central** with ~20 feature modules; that boot workload appears to
+> starve/block the USB device thread. The DUT's build is verified and it fans
+> out through the matrix; its e2e job is `continue-on-error` until the USB
+> blocker is resolved (candidate next steps: boot with the wired split
+> peripheral present so the split machinery settles, or bump the USB thread
+> priority / defer heavy module init).
+
+## Adding a DUT
 
 Append one entry to the `duts` JSON in the `matrix` job of
-`.github/workflows/renode-webserial-e2e.yml` (`id`, `build_yaml`, `cmake_args`,
-`device`). Both the build and e2e jobs fan out over it automatically.
+`.github/workflows/renode-webserial-e2e.yml`. Each entry carries its own build
+source (`repo`/`ref`/`manifest`/`build`/`elf`), its `device` name, its Renode
+`platform` (`""` harness USB, `dya2` USB+trackball), its `specs` dirs
+(`tests/common` for all, plus `tests/official` or `tests/dya2`), and an
+`experimental` flag (allow the e2e job to fail). Both the build and e2e jobs fan
+out over it automatically.

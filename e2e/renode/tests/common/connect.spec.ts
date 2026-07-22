@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { serialShimSource } from "../serial-shim.mjs";
+import { serialShimSource } from "../../serial-shim.mjs";
 
 const WS_URL = process.env.WS_URL || "ws://127.0.0.1:8788";
 

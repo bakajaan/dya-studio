@@ -25,6 +25,7 @@ unread terminal.
 import os
 import socket
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -41,6 +42,89 @@ import renode_harness as H  # noqa: E402
 
 USB_REPL_TEMPLATE = "xiao_nrf52840_usb.repl"
 BRIDGE_NAME = "bridge"
+
+# Self-contained (vendored) Renode platform for the dya2 DUT: the USB real-binary
+# platform + a simulated PMW3610 trackball on SPIM0. Used when RENODE_PLATFORM=dya2
+# (or the ELF name looks like a dya2/trackball image), so the browser connects
+# over USB CDC exactly as with the harness USB platform AND pointer motion can be
+# injected via the monitor (`sysbus.spi0.trackball QueueMotion <dx> <dy>`). These
+# files live under e2e/renode/platforms so this repo does not depend on the shared
+# harness platform dir; only the Python helpers (RenodeSession, NVS preload,
+# attach_dual_cdc_bridge) are reused from the harness lib.
+VENDOR_ROOT = Path(__file__).resolve().parent
+VENDOR_PLATFORMS = VENDOR_ROOT / "platforms"
+DYA2_REPL = "xiao_nrf52840_usb_pmw3610.repl"
+DYA2_RESC = "dya2_single.resc"
+
+
+def _want_dya2(elf: Path) -> bool:
+    """True if this ELF should boot on the vendored USB+PMW3610 dya2 platform:
+    explicit RENODE_PLATFORM=dya2, or an ELF path that looks like a dya2 /
+    trackball image (a convenience heuristic for local runs)."""
+    plat = os.environ.get("RENODE_PLATFORM", "").strip().lower()
+    if plat == "dya2":
+        return True
+    if plat:  # any other explicit value opts out
+        return False
+    name = str(elf).lower()
+    return "dya2" in name or "trackball" in name
+
+
+def _materialize_dya2_repl() -> str:
+    """Write a temp copy of the vendored combined repl with the model
+    `filename:`/`include @platforms/models/...` paths rewritten to absolute
+    against e2e/renode/platforms (Renode resolves neither against the .repl dir
+    nor its cwd). Returns the temp path (caller unlinks after load)."""
+    template = (VENDOR_PLATFORMS / DYA2_REPL).read_text()
+    abs_models = str((VENDOR_PLATFORMS / "models").resolve())
+    repl = template.replace('filename: "platforms/models/', f'filename: "{abs_models}/')
+    repl = repl.replace("include @platforms/models/", f"include @{abs_models}/")
+    fd, path = tempfile.mkstemp(prefix="dya2-usb-pmw3610-", suffix=".repl")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(repl)
+    return path
+
+
+def boot_dya2_real(renode_path, elf, port_base, boot_wait):
+    """Boot the real dya2 studio-rpc-usb-uart ELF (central-only) on the vendored
+    USB+PMW3610 platform. Mirrors H.boot_single_real (VectorTableOffset at the UF2
+    load offset, erased-0xFF NVS preload, `start` after the UART sockets connect)
+    but loads the vendored dya2_single.resc + combined repl so the PMW3610
+    trackball model is present. Returns (session, console, rpc)."""
+    repl_path = _materialize_dya2_repl()
+    ff_path = H._write_ff_binary(H.STORAGE_SIZE_DEFAULT)
+    session = H.RenodeSession(
+        renode_path,
+        VENDOR_PLATFORMS / DYA2_RESC,
+        monitor_port=port_base,
+        variables={
+            "bin": f"@{elf}",
+            "console_port": port_base + 1,
+            "rpc_port": port_base + 2,
+            "platform": f"@{repl_path}",
+        },
+        cwd=VENDOR_ROOT,
+    )
+    session.rtt_socket = None
+    try:
+        session.start(boot_wait=boot_wait)
+        console = session.connect_uart(port_base + 1)
+        rpc = session.connect_uart(port_base + 2)
+        assert session.mon is not None
+        session.mon.execute(
+            f"sysbus LoadBinary @{ff_path} {hex(H.STORAGE_ADDR_DEFAULT)}"
+        )
+        session.go()
+    except Exception:
+        session.stop()
+        raise
+    finally:
+        for tmp in (repl_path, ff_path):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return session, console, rpc
 
 
 def _mon_is_wired(mon, channel: str) -> bool:
@@ -135,13 +219,19 @@ def main() -> None:
 
     # Boot the real flashable image on the NRF_USBD_Full usb platform. console =
     # uart0 (silent on a real image), rpc = idle uart1 -- both owned for symmetry.
-    session, console, rpc = H.boot_single_real(
-        renode,
-        elf,
-        port_base=port_base,
-        repl_template=USB_REPL_TEMPLATE,
-        boot_wait=boot_wait,
-    )
+    # A dya2 DUT boots on the vendored USB+PMW3610 platform instead, so the
+    # trackball model is present (Studio still rides USB CDC exactly the same).
+    if _want_dya2(elf):
+        print("dya2 platform: USB CDC + simulated PMW3610 trackball", file=sys.stderr)
+        session, console, rpc = boot_dya2_real(renode, elf, port_base, boot_wait)
+    else:
+        session, console, rpc = H.boot_single_real(
+            renode,
+            elf,
+            port_base=port_base,
+            repl_template=USB_REPL_TEMPLATE,
+            boot_wait=boot_wait,
+        )
     assert session.mon is not None
     mon = session.mon
     cdc: list = []
