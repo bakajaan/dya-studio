@@ -4,10 +4,15 @@
 # studio-rpc-usb-uart image; Studio RPC rides the emulated USB CDC (NRF_USBD_Full
 # + DualCdcAcmBridge from zmk-west-commands), which drains large replies, so the
 # app reaches the fully-connected screen. See e2e/renode/README.md for the
-# architecture.
+# architecture and e2e/renode/firmware/README.md for the DUT build recipes.
 #
-# Opt-in / path-scoped so it never burdens ordinary PRs (the firmware build is
-# a full Zephyr build, ~15-20 min cold).
+# Structure: a `matrix` job emits the DUT firmware list (single source of truth);
+# `build-dut` fans out over it to build each real image; `e2e` fans out over the
+# same list to run the full Playwright suite (tests/*.spec.ts) against each DUT.
+# Adding a new DUT (e.g. a real dya2 build) is a one-line edit to that list.
+#
+# Opt-in / path-scoped so it never burdens ordinary PRs (each firmware build is a
+# full Zephyr build, ~15-20 min cold).
 name: renode-webserial-e2e
 
 on:
@@ -22,15 +27,46 @@ env:
   # build config. Pin a ref for reproducibility.
   ZMK_WC_REPO: cormoran/zmk-west-commands
   ZMK_WC_REF: main
-  # Keyboard name the DUT advertises via GetDeviceInfo (zmk-west-commands'
-  # renode_tester shield). Swap both this and the DUT below for a real dya build.
-  DEVICE_NAME: Renode
 
 jobs:
+  # Single source of truth for the DUT firmware matrix, consumed by both
+  # build-dut and e2e via fromJSON. Each entry:
+  #   id         - stable slug (artifact name + matrix label)
+  #   build_yaml - zmk-west-commands build yaml (its tests/zmk-config)
+  #   cmake_args - extra `west build -- <args>` merged onto the yaml's cmake-args
+  #   device     - the name the DUT advertises via GetDeviceInfo (DEVICE_NAME)
+  # The official-unlocked DUT builds the exact studio-rpc-usb-uart image with
+  # CONFIG_ZMK_STUDIO_LOCKING=n so it boots UNLOCKED -- required for the Keymap
+  # tab to serve the keymap on official ZMK (which has no RPC unlock).
+  matrix:
+    name: Compute DUT matrix
+    runs-on: ubuntu-latest
+    outputs:
+      duts: ${{ steps.set.outputs.duts }}
+    steps:
+      - id: set
+        run: |
+          cat >duts.json <<'JSON'
+          [
+            {
+              "id": "official-unlocked",
+              "build_yaml": "tests/zmk-config/build-ble.yaml",
+              "cmake_args": " -DCONFIG_ZMK_STUDIO_LOCKING=n",
+              "device": "Renode"
+            }
+          ]
+          JSON
+          echo "duts=$(jq -c . duts.json)" >> "$GITHUB_OUTPUT"
+
   build-dut:
-    name: Build studio-rpc-usb-uart DUT (real image)
+    name: Build DUT (${{ matrix.dut.id }})
+    needs: matrix
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        dut: ${{ fromJSON(needs.matrix.outputs.duts) }}
     container:
       image: zmkfirmware/zmk-build-arm:stable
     steps:
@@ -47,20 +83,28 @@ jobs:
           west zephyr-export
       - name: Build DUT (real studio-rpc-usb-uart image)
         # The EXACT hardware-flashable image (xiao_ble//zmk + renode_tester shield
-        # + studio-rpc-usb-uart snippet). Renode's usb mode boots this same image;
-        # no Renode-specific build config. Produces build/ble/zephyr/zmk.elf.
-        run: west zmk-build tests/zmk-config --build-yaml tests/zmk-config/build-ble.yaml -af ble -d build
+        # + studio-rpc-usb-uart snippet) from the DUT's build yaml, with the DUT's
+        # extra cmake-args merged on. Produces build/ble/zephyr/zmk.elf.
+        run: >-
+          west zmk-build tests/zmk-config
+          --build-yaml ${{ matrix.dut.build_yaml }}
+          --cmake-args '${{ matrix.dut.cmake_args }}'
+          -af ble -d build
       - name: Upload DUT ELF
         uses: actions/upload-artifact@v4
         with:
-          name: dut-elf
+          name: dut-elf-${{ matrix.dut.id }}
           path: build/ble/zephyr/zmk.elf
 
   e2e:
-    name: dya-studio ⇄ WebSerial ⇄ Renode
-    needs: build-dut
+    name: e2e (${{ matrix.dut.id }})
+    needs: [matrix, build-dut]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        dut: ${{ fromJSON(needs.matrix.outputs.duts) }}
     steps:
       - name: Checkout dya-studio
         uses: actions/checkout@v5
@@ -86,7 +130,7 @@ jobs:
       - name: Download DUT ELF
         uses: actions/download-artifact@v4
         with:
-          name: dut-elf
+          name: dut-elf-${{ matrix.dut.id }}
           path: fw
 
       - name: Install e2e deps (Playwright + ws)
@@ -95,19 +139,22 @@ jobs:
           npm install
           npx playwright install --with-deps chromium
 
-      - name: Run WebSerial ⇄ Renode e2e
+      - name: Run WebSerial ⇄ Renode e2e (full suite)
+        # No spec argument -> run-local.sh runs every tests/*.spec.ts against this
+        # DUT in one Renode boot: the generic connect proof + the Keymap-tab
+        # behaviors/edit round-trip.
         working-directory: e2e/renode
         env:
           ZMK_WC_RENODE_LIB: ${{ github.workspace }}/zmk-west-commands/scripts/lib/renode
           DIST_DIR: ${{ github.workspace }}/dist
-          DEVICE_NAME: ${{ env.DEVICE_NAME }}
+          DEVICE_NAME: ${{ matrix.dut.device }}
         run: bash run-local.sh "${{ github.workspace }}/fw/zmk.elf"
 
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-artifacts
+          name: playwright-artifacts-${{ matrix.dut.id }}
           path: |
             e2e/renode/playwright-report
             e2e/renode/test-results

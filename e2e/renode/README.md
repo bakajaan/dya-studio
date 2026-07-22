@@ -52,7 +52,9 @@ socket (`RPC_PORT`) that the Node bridge speaks to, unchanged.
 | `serial-shim.mjs`       | injects a `navigator.serial` shim implementing only the SerialPort surface the ts-client uses, bridged to the WebSocket.                                                                                                                                               |
 | `serve.mjs`             | dependency-free static server for the built `dist/`.                                                                                                                                                                                                                   |
 | `tests/connect.spec.ts` | Playwright: clicks the real "Connect via USB" button, asserts the device name round-trips **and** the app reaches the connected screen.                                                                                                                                |
-| `run-local.sh`          | orchestrates renode_serve → bridge → Playwright.                                                                                                                                                                                                                       |
+| `tests/keymap.spec.ts`  | Playwright: opens the **Keymap** tab, asserts the keymap + per-key behaviors render, then does a real behavior edit round-trip (reassign a key via the behavior picker → save to device → re-read). Needs the **unlocked** DUT (see `firmware/README.md`).             |
+| `firmware/README.md`    | how each DUT firmware (e.g. the `official-unlocked` image the Keymap test needs) is built — the reproducible recipes behind the CI firmware matrix.                                                                                                                    |
+| `run-local.sh`          | orchestrates renode_serve → bridge → Playwright (extra args pass through to `playwright test`, so you can target one spec).                                                                                                                                            |
 
 ## Run locally
 
