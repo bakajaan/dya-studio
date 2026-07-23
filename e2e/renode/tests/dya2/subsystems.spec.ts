@@ -12,9 +12,14 @@ import { connectDya2 } from "./dya2.helpers";
 // the emulated USB CDC and painted a populated list. Read-only: no device
 // writes.
 
-// Identifiers the dya2 (main+dya) central is expected to advertise. These mirror
-// the *_IDENTIFIER constants in src/hooks/* and were confirmed against the live
-// DUT dump (see the E2E_DEBUG "subsystem identifiers" log line below).
+// A meaningful subset of the identifiers the dya2 (main+dya) central actually
+// advertises — each a distinct fork custom-RPC subsystem, all CONFIRMED against
+// the live DUT dump (E2E_DEBUG "subsystem identifiers" log line below; the DUT
+// reports 14, incl. cormoran__physical_layouts / cormoran_rip / zmk__input_stream
+// / zmk__settings). We assert this curated subset (not the whole 14) so adding or
+// dropping a peripheral module in the firmware doesn't spuriously fail the test,
+// while still proving the real fork subsystems enumerate. NOTE: this dya2 build
+// does NOT ship kscan-diagnostics, so it is intentionally absent here.
 const EXPECTED_SUBSYSTEM_IDENTIFIERS = [
   "zmk__device_info", // device-info
   "cormoran__pmw3610", // pmw3610 trackball
@@ -25,7 +30,7 @@ const EXPECTED_SUBSYSTEM_IDENTIFIERS = [
   "cormoran__runtime_macro", // runtime-macro
   "cormoran__runtime_combo", // runtime-combo
   "cormoran__default_layer", // default-layer
-  "cormoran__kscan_diagnostics", // kscan-diagnostics
+  "cormoran__fast_keymap", // fast-keymap (powers the Keymap tab's fast path)
 ];
 
 // The identifier of each subsystem card is the only `<p>` carrying BOTH the
@@ -53,8 +58,21 @@ test("dya-studio Subsystems tab: enumerates the real dya2 custom Studio-RPC subs
     page.getByRole("heading", { name: "Custom Subsystems" }),
   ).toBeVisible();
 
+  // Every subsystem the dya2 fork advertises is one DYA Studio has a dedicated
+  // UI for, so they all land in the collapsible "Already supported by DYA
+  // Studio" SectionCard (src/components/troubleshooting/SectionCard.tsx), which
+  // is COLLAPSED by default and only renders its subsystem cards (incl. the
+  // identifier <p>) once expanded. Wait for that section to appear (proves the
+  // ListCustomSubsystem reply arrived and produced cards) and expand it so the
+  // identifiers render.
+  const supportedSection = page.getByRole("button", {
+    name: "Already supported by DYA Studio",
+  });
+  await expect(supportedSection).toBeVisible({ timeout: 60_000 });
+  await supportedSection.click();
+
   // The list is POPULATED: the firmware's ListCustomSubsystem reply produced
-  // several subsystem cards. Wait for the enumeration to arrive/render.
+  // several subsystem cards. Wait for the enumeration to render.
   await expect
     .poll(async () => identifierParagraphs(page).count(), {
       timeout: 60_000,

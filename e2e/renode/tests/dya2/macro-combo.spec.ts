@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from "@playwright/test";
-import { connectDya2 } from "./connect-robust.helper";
+import { connectDya2 } from "./dya2.helpers";
 
 // The dya2 fork (main+dya) ships two custom Studio subsystems that the
 // Macro&Combo tab drives:

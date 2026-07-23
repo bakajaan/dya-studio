@@ -145,16 +145,43 @@ Confirm the central is unlocked: `.config` has
 `# CONFIG_ZMK_STUDIO_LOCKING is not set`, `CONFIG_ZMK_KEYBOARD_NAME="DYA2"`,
 `CONFIG_PMW3610=y`.
 
-Run the two-machine wired split (`DYA2_PERIPHERAL_ELF` selects it):
+Run the two-machine wired split (`DYA2_PERIPHERAL_ELF` selects it). **Run each
+spec in its OWN boot** — the dya2 DUT serves only **one Studio connection per
+Renode boot** (see "Per-boot execution" below), so `run-local.sh` is invoked
+once per spec (it boots one Renode per call):
 
 ```bash
 cd ..                      # e2e/renode
-ZMK_WC_RENODE_LIB=/path/to/zmk-west-commands/scripts/lib/renode \
-DEVICE_NAME=DYA2 RENODE_PLATFORM=dya2 \
-DYA2_PERIPHERAL_ELF=/path/to/build/left/zephyr/zmk.elf \
-  bash run-local.sh /path/to/build/right_trackball_studio_unlocked/zephyr/zmk.elf \
-  tests/common tests/dya2
+for spec in tests/common/connect.spec.ts tests/dya2/*.spec.ts; do
+  ZMK_WC_RENODE_LIB=/path/to/zmk-west-commands/scripts/lib/renode \
+  DEVICE_NAME=DYA2 RENODE_PLATFORM=dya2 \
+  DYA2_PERIPHERAL_ELF=/path/to/build/left/zephyr/zmk.elf \
+    bash run-local.sh \
+      /path/to/build/right_trackball_studio_unlocked/zephyr/zmk.elf \
+      "$spec"
+done
 ```
+
+### Per-boot execution (dya2)
+
+The dya2 two-machine (wired-split) central serves only **one Studio connection
+per Renode boot**; a second connect desyncs on buffered bytes ("device did not
+respond"). So dya2 specs **must not share a boot**: never combine
+`tests/common/connect.spec.ts` with a `tests/dya2/*.spec.ts`, and never pass
+multiple specs to one `run-local.sh` call. Each spec gets its own fresh boot
+(the loop above; ~2–3 min each since the CDC wires only after ~90–130 s).
+
+There is also a **page-load auto-reconnect**: the WebSerial shim always reports
+the paired port, so dya-studio reconnects with no click — the shared
+`connectDya2` (`tests/dya2/dya2.helpers.ts`) prefers that path and clicks
+"Connect via USB" only as a fallback (clicking during auto-reconnect opens the
+port twice and desyncs the RPC framing). Both facts are documented at the top of
+`dya2.helpers.ts`.
+
+The CI workflow encodes this with a per-DUT `one_connection_per_boot` matrix
+flag: when true, the `e2e` job loops `run-local.sh` once per spec (expanding the
+`tests/dya2` dir to its individual `*.spec.ts`) instead of the single-boot run
+official uses.
 
 `RENODE_PLATFORM=dya2` + `DYA2_PERIPHERAL_ELF` makes `renode_serve.py` boot
 `platforms/dya2_wired_split.resc`: the **central** on
@@ -213,7 +240,10 @@ an `experimental` flag (allow the e2e job to fail). Optional fields:
 `keymap_overlay` — a keymap vendored in this repo (path from the dya-studio repo
 root) that `build-dut` copies over the `renode_tester` shield keymap before
 building (the official DUT uses this for its 4-layer keymap); `destructive_specs`
-— specs that wipe device state and must run in their own second Renode boot.
+— specs that wipe device state and must run in their own second Renode boot;
+`one_connection_per_boot` — true if the DUT serves only one Studio connection
+per boot (dya2), making the `e2e` job run each spec in its own boot (see
+"Per-boot execution" above).
 A **wired-split** DUT also sets `peripheral_build`/`peripheral_elf` for its
 second half; the build job builds + uploads it and the e2e job downloads it and
 forwards it as `DYA2_PERIPHERAL_ELF` so `renode_serve.py` boots two machines.

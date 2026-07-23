@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from "@playwright/test";
-import { connectDya2 } from "./connect-robust.helper";
+import { connectDya2 } from "./dya2.helpers";
 
 // dya2 is the cormoran fork (main+dya): an UNLOCKED, rich ~8-layer keyboard
 // (Base/Win/Mac/iOS/Linux/Config/Mouse/Scroll) whose keymap is served over the

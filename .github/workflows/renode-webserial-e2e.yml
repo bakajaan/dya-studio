@@ -65,6 +65,12 @@ jobs:
   #              official specs if they shared its boot (and it must not follow
   #              keymap.spec, which persists an A->F edit). The e2e job invokes
   #              run-local.sh a SECOND time for these (a second boot).
+  #   one_connection_per_boot - true => this DUT serves only ONE Studio
+  #              connection per Renode boot (a second connect desyncs on buffered
+  #              bytes), so the e2e job runs EACH spec in its own fresh boot
+  #              instead of one boot for the whole `specs` set. dya2 (two-machine
+  #              wired split) needs this; official does not. See firmware/README
+  #              ("Per-boot execution") and tests/dya2/dya2.helpers.ts.
   #   experimental - true => the e2e job is allowed to fail (continue-on-error).
   #              The build still runs+gates; used for a DUT with a known e2e
   #              blocker so it fans out without turning the whole workflow red.
@@ -97,6 +103,7 @@ jobs:
               "platform": "",
               "specs": "tests/common tests/official/keymap-layers.spec.ts tests/official/keymap.spec.ts",
               "destructive_specs": "tests/official/reset.spec.ts",
+              "one_connection_per_boot": false,
               "experimental": false
             },
             {
@@ -113,6 +120,7 @@ jobs:
               "platform": "dya2",
               "specs": "tests/common tests/dya2",
               "destructive_specs": "",
+              "one_connection_per_boot": true,
               "experimental": true
             }
           ]
@@ -228,10 +236,12 @@ jobs:
           npm install
           npx playwright install --with-deps chromium
 
-      - name: Run WebSerial ⇄ Renode e2e (this DUT's scoped specs)
-        # run-local.sh forwards its extra args to `playwright test`, so the DUT's
-        # `specs` dirs select exactly the specs valid for this DUT in one Renode
-        # boot (tests/common for all; tests/official or tests/dya2 per DUT).
+      # Single-boot DUTs (official): run all of `specs` in ONE Renode boot.
+      # run-local.sh forwards its extra args to `playwright test`, so the DUT's
+      # `specs` dirs select exactly the specs valid for this DUT in one boot
+      # (tests/common for all; tests/official per DUT).
+      - name: Run WebSerial ⇄ Renode e2e (single Renode boot)
+        if: ${{ !matrix.dut.one_connection_per_boot }}
         working-directory: e2e/renode
         env:
           ZMK_WC_RENODE_LIB: ${{ github.workspace }}/zmk-west-commands/scripts/lib/renode
@@ -242,6 +252,39 @@ jobs:
           # boots two machines (central + peripheral, uart0 links cross-connected).
           DYA2_PERIPHERAL_ELF: ${{ matrix.dut.peripheral_build != '' && format('{0}/fw-peripheral/zmk.elf', github.workspace) || '' }}
         run: bash run-local.sh "${{ github.workspace }}/fw/zmk.elf" ${{ matrix.dut.specs }}
+
+      # Per-boot DUTs (dya2): the two-machine wired-split DUT serves only ONE
+      # Studio connection per boot, so run EACH spec in its OWN fresh Renode boot
+      # (run-local.sh boots one Renode per invocation). Expand each `specs` token:
+      # a directory (tests/dya2) fans out to its individual *.spec.ts, a file runs
+      # as-is — so tests/common/connect.spec.ts and each tests/dya2/*.spec.ts each
+      # get a clean boot. NEVER pass multiple specs to one invocation here.
+      - name: Run WebSerial ⇄ Renode e2e (per-boot loop, one Studio connection per boot)
+        if: ${{ matrix.dut.one_connection_per_boot }}
+        working-directory: e2e/renode
+        env:
+          ZMK_WC_RENODE_LIB: ${{ github.workspace }}/zmk-west-commands/scripts/lib/renode
+          DIST_DIR: ${{ github.workspace }}/dist
+          DEVICE_NAME: ${{ matrix.dut.device }}
+          RENODE_PLATFORM: ${{ matrix.dut.platform }}
+          DYA2_PERIPHERAL_ELF: ${{ matrix.dut.peripheral_build != '' && format('{0}/fw-peripheral/zmk.elf', github.workspace) || '' }}
+        run: |
+          set -euo pipefail
+          ELF="${{ github.workspace }}/fw/zmk.elf"
+          rc=0
+          for entry in ${{ matrix.dut.specs }}; do
+            if [ -d "$entry" ]; then
+              specs=$(ls "$entry"/*.spec.ts)
+            else
+              specs="$entry"
+            fi
+            for spec in $specs; do
+              echo "::group::Renode boot for $spec"
+              bash run-local.sh "$ELF" "$spec" || rc=1
+              echo "::endgroup::"
+            done
+          done
+          exit "$rc"
 
       # Destructive specs (factory reset) wipe NVS, so they run in their OWN
       # fresh Renode boot AFTER the main specs — see the matrix `destructive_specs`
