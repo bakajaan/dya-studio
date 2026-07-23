@@ -38,6 +38,12 @@ jobs:
   #   id       - stable slug (artifact name + matrix label)
   #   repo/ref - the config repo + branch the DUT firmware is built from
   #   manifest - west init -l manifest (relative to that repo)
+  #   keymap_overlay - ("" = none) a keymap file vendored in THIS repo (path
+  #              relative to the dya-studio repo root) that build-dut copies over
+  #              the DUT config repo's renode_tester shield keymap before build,
+  #              so the DUT ships that keymap. official-unlocked uses the
+  #              4-layer renode_tester_multilayer.keymap (Base/Lower/Raise/Adjust)
+  #              so the layer-management specs have >=2 layers to work with.
   #   build    - the `west zmk-build ...` invocation (its cmake-args merged in)
   #   elf      - path (relative to the west topdir) of the produced zmk.elf
   #   peripheral_build - ("" = none) a second `west zmk-build ...` for a wired
@@ -50,7 +56,15 @@ jobs:
   #   device   - the name the DUT advertises via GetDeviceInfo (DEVICE_NAME)
   #   platform - RENODE_PLATFORM for renode_serve.py ("" = harness USB platform,
   #              "dya2" = vendored USB+PMW3610 trackball platform)
-  #   specs    - the Playwright spec dirs this DUT runs (passed to run-local.sh)
+  #   specs    - the Playwright spec dirs/files this DUT runs in ONE Renode boot
+  #              (passed to run-local.sh). Ordering is Playwright's path sort.
+  #   destructive_specs - ("" = none) specs that WIPE device state (NVS) and so
+  #              must run in their OWN fresh Renode boot, after the main `specs`
+  #              run. official-unlocked runs reset.spec.ts here: it persists a
+  #              keymap edit then factory-resets, which would corrupt the other
+  #              official specs if they shared its boot (and it must not follow
+  #              keymap.spec, which persists an A->F edit). The e2e job invokes
+  #              run-local.sh a SECOND time for these (a second boot).
   #   experimental - true => the e2e job is allowed to fail (continue-on-error).
   #              The build still runs+gates; used for a DUT with a known e2e
   #              blocker so it fans out without turning the whole workflow red.
@@ -74,13 +88,15 @@ jobs:
               "repo": "cormoran/zmk-west-commands",
               "ref": "main",
               "manifest": "scripts/west-test-standalone.yml",
+              "keymap_overlay": "e2e/renode/firmware/renode_tester_multilayer.keymap",
               "build": "west zmk-build tests/zmk-config --build-yaml tests/zmk-config/build-ble.yaml --cmake-args ' -DCONFIG_ZMK_STUDIO_LOCKING=n' -af ble -d build",
               "elf": "build/ble/zephyr/zmk.elf",
               "peripheral_build": "",
               "peripheral_elf": "",
               "device": "Renode",
               "platform": "",
-              "specs": "tests/common tests/official",
+              "specs": "tests/common tests/official/keymap-layers.spec.ts tests/official/keymap.spec.ts",
+              "destructive_specs": "tests/official/reset.spec.ts",
               "experimental": false
             },
             {
@@ -88,6 +104,7 @@ jobs:
               "repo": "cormoran/zmk-keyboard-dya2",
               "ref": "support-new-zmk-modules",
               "manifest": "config/west-workspace.yml",
+              "keymap_overlay": "",
               "build": "west zmk-build config -af right_trackball_studio_unlocked -d build",
               "elf": "build/right_trackball_studio_unlocked/zephyr/zmk.elf",
               "peripheral_build": "west zmk-build config -af left -d build",
@@ -95,6 +112,7 @@ jobs:
               "device": "DYA2",
               "platform": "dya2",
               "specs": "tests/common tests/dya2",
+              "destructive_specs": "",
               "experimental": true
             }
           ]
@@ -118,6 +136,20 @@ jobs:
         with:
           repository: ${{ matrix.dut.repo }}
           ref: ${{ matrix.dut.ref }}
+      # The keymap overlay is vendored in THIS (dya-studio) repo, not the DUT
+      # config repo, so check it out into a side path to copy from.
+      - name: Checkout dya-studio (keymap overlay source)
+        if: matrix.dut.keymap_overlay != ''
+        uses: actions/checkout@v5
+        with:
+          path: _overlay-src
+      - name: Overlay multi-layer keymap onto renode_tester shield
+        if: matrix.dut.keymap_overlay != ''
+        run: |
+          cp "_overlay-src/${{ matrix.dut.keymap_overlay }}" \
+             tests/zmk-config/boards/shields/renode_tester/renode_tester.keymap
+          echo "renode_tester.keymap now:"
+          cat tests/zmk-config/boards/shields/renode_tester/renode_tester.keymap
       - name: West init/update
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -210,6 +242,21 @@ jobs:
           # boots two machines (central + peripheral, uart0 links cross-connected).
           DYA2_PERIPHERAL_ELF: ${{ matrix.dut.peripheral_build != '' && format('{0}/fw-peripheral/zmk.elf', github.workspace) || '' }}
         run: bash run-local.sh "${{ github.workspace }}/fw/zmk.elf" ${{ matrix.dut.specs }}
+
+      # Destructive specs (factory reset) wipe NVS, so they run in their OWN
+      # fresh Renode boot AFTER the main specs — see the matrix `destructive_specs`
+      # note. run-local.sh boots one Renode per invocation, so this is a clean
+      # second boot with the same DUT ELF.
+      - name: Run destructive specs (fresh Renode boot)
+        if: matrix.dut.destructive_specs != ''
+        working-directory: e2e/renode
+        env:
+          ZMK_WC_RENODE_LIB: ${{ github.workspace }}/zmk-west-commands/scripts/lib/renode
+          DIST_DIR: ${{ github.workspace }}/dist
+          DEVICE_NAME: ${{ matrix.dut.device }}
+          RENODE_PLATFORM: ${{ matrix.dut.platform }}
+          DYA2_PERIPHERAL_ELF: ${{ matrix.dut.peripheral_build != '' && format('{0}/fw-peripheral/zmk.elf', github.workspace) || '' }}
+        run: bash run-local.sh "${{ github.workspace }}/fw/zmk.elf" ${{ matrix.dut.destructive_specs }}
 
       - name: Upload Playwright artifacts on failure
         if: failure()

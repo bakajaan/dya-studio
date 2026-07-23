@@ -7,9 +7,11 @@ firmware matrix (`.github/workflows/renode-webserial-e2e.yml`) is reproducible.
 
 The build config lives in
 [cormoran/zmk-west-commands](https://github.com/cormoran/zmk-west-commands)'s
-`tests/zmk-config` (the `renode_tester` shield: a single-layer 2×2 keymap
-`&kp A / &kp B / &kp C / &kp D`, advertised name **"Renode"**). We do **not**
-vendor firmware here — CI builds it fresh from that repo.
+`tests/zmk-config` (the `renode_tester` shield, advertised name **"Renode"**).
+The stock shield keymap is a single-layer 2×2 `&kp A / &kp B / &kp C / &kp D`.
+We do **not** vendor the firmware here — CI builds it fresh from that repo — but
+we **do** vendor a keymap the CI overlays onto that shield (see
+`renode_tester_multilayer.keymap` and the `official-unlocked` recipe below).
 
 ## Prerequisites
 
@@ -30,32 +32,65 @@ west update --narrow
 west zephyr-export
 ```
 
-### `official-unlocked` — the Keymap-tab DUT
+### `official-unlocked` — the Keymap-tab DUT (multi-layer)
 
 The exact `studio-rpc-usb-uart` image built from stock `build-ble.yaml`
 (`xiao_ble//zmk`, `renode_tester` shield, `-DCONFIG_ZMK_STUDIO=y`, snippet
 `studio-rpc-usb-uart`) **plus `CONFIG_ZMK_STUDIO_LOCKING=n`** so the device boots
-**unlocked**.
+**unlocked**, and **plus the vendored 4-layer keymap overlaid onto the shield**.
 
 Why unlocked: ZMK Studio only serves the keymap once the device is unlocked, but
 official ZMK has no RPC unlock and the `renode_tester` shield does not bind
 `&studio_unlock`. `CONFIG_ZMK_STUDIO_LOCKING=n` is a stock ZMK Kconfig (not
 fork-only) that makes the device boot unlocked, so the Keymap tab reaches the
-keymap on an official image. `tests/keymap.spec.ts` requires this DUT.
+keymap on an official image. All of `tests/official/*` require this DUT.
 
-Merge the extra Kconfig onto the stock yaml with `--cmake-args` (this is exactly
-what CI does — no extra yaml needed):
+**Why multi-layer.** ZMK's layer capacity equals the number of DT layer nodes,
+so on the stock single-layer keymap the Studio Add/Delete/Move-layer actions are
+all disabled — `tests/official/keymap-layers.spec.ts` (reorder / rename /
+delete+restore) can't run. We therefore overlay
+[`renode_tester_multilayer.keymap`](./renode_tester_multilayer.keymap) — **four
+named layers** Base (`&kp A/B/C/D`) / Lower (`N1-4`) / Raise (`F1-4`) / Adjust
+(`X/Y/Z/W`), each with a `display-name` — over the shield's
+`renode_tester.keymap` before building. The Base layer keeps the A/B/C/D
+bindings, so `tests/official/keymap.spec.ts` (Base A→F edit) and
+`tests/official/reset.spec.ts` still hold.
+
+**How CI overlays it.** In the `build-dut` job, after checking out the DUT config
+repo, CI checks out this repo to `_overlay-src/` and copies the vendored keymap
+over the shield keymap, then builds normally:
 
 ```bash
+cp _overlay-src/e2e/renode/firmware/renode_tester_multilayer.keymap \
+   tests/zmk-config/boards/shields/renode_tester/renode_tester.keymap
 west zmk-build tests/zmk-config \
   --build-yaml tests/zmk-config/build-ble.yaml \
   --cmake-args ' -DCONFIG_ZMK_STUDIO_LOCKING=n' \
   -af ble -d build
-# -> build/ble/zephyr/zmk.elf   (DEVICE_NAME=Renode)
+# -> build/ble/zephyr/zmk.elf   (DEVICE_NAME=Renode, 4 layers)
 ```
+
+To build it locally, copy `renode_tester_multilayer.keymap` (from this dir) over
+`tests/zmk-config/boards/shields/renode_tester/renode_tester.keymap` in your
+zmk-west-commands checkout before running the `west zmk-build` above.
 
 Confirm it is unlocked: `build/ble/zephyr/.config` should show
 `# CONFIG_ZMK_STUDIO_LOCKING is not set` (and `CONFIG_ZMK_STUDIO=y`).
+
+**Spec ordering (important).** `tests/official/reset.spec.ts` is **destructive**:
+it persists a keymap edit then factory-resets (wipes NVS). It must run in its own
+Renode boot, so CI runs it via a separate `run-local.sh` invocation
+(`destructive_specs` in the matrix). Locally, run the composable specs in one
+boot and reset in another:
+
+```bash
+# one boot: connect + layer management + Base-layer edit (each reverts itself,
+# except keymap.spec persists A->F, which is why reset must NOT share this boot)
+... bash run-local.sh <elf> tests/common \
+      tests/official/keymap-layers.spec.ts tests/official/keymap.spec.ts
+# a SEPARATE fresh boot for the destructive reset
+... bash run-local.sh <elf> tests/official/reset.spec.ts
+```
 
 Equivalent plain-west fallback:
 
@@ -172,10 +207,14 @@ the monitor on the central machine:
 Append one entry to the `duts` JSON in the `matrix` job of
 `.github/workflows/renode-webserial-e2e.yml`. Each entry carries its own build
 source (`repo`/`ref`/`manifest`/`build`/`elf`), its `device` name, its Renode
-`platform` (`""` harness USB, `dya2` USB+trackball), its `specs` dirs
-(`tests/common` for all, plus `tests/official` or `tests/dya2`), and an
-`experimental` flag (allow the e2e job to fail). A **wired-split** DUT also sets
-`peripheral_build`/`peripheral_elf` for its second half; the build job builds +
-uploads it and the e2e job downloads it and forwards it as `DYA2_PERIPHERAL_ELF`
-so `renode_serve.py` boots two machines. Both the build and e2e jobs fan out over
-the list automatically.
+`platform` (`""` harness USB, `dya2` USB+trackball), its `specs` dirs/files (run
+in one boot; `tests/common` for all, plus `tests/official` or `tests/dya2`), and
+an `experimental` flag (allow the e2e job to fail). Optional fields:
+`keymap_overlay` — a keymap vendored in this repo (path from the dya-studio repo
+root) that `build-dut` copies over the `renode_tester` shield keymap before
+building (the official DUT uses this for its 4-layer keymap); `destructive_specs`
+— specs that wipe device state and must run in their own second Renode boot.
+A **wired-split** DUT also sets `peripheral_build`/`peripheral_elf` for its
+second half; the build job builds + uploads it and the e2e job downloads it and
+forwards it as `DYA2_PERIPHERAL_ELF` so `renode_serve.py` boots two machines.
+Both the build and e2e jobs fan out over the list automatically.

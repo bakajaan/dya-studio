@@ -1,64 +1,16 @@
 import { test, expect, type Page } from "@playwright/test";
-import { serialShimSource } from "../../serial-shim.mjs";
+import { connect } from "../support/connect";
 
-const WS_URL = process.env.WS_URL || "ws://127.0.0.1:8788";
-
-// Name the DUT firmware advertises via GetDeviceInfo. The default DUT is
-// zmk-west-commands' real studio-rpc-usb-uart image (renode_tester shield → name
-// "Renode"); override for a real dya build.
-const DEVICE_NAME = process.env.DEVICE_NAME || "Renode";
-
-// The renode_tester shield ships a single-layer 2x2 keymap:
+// The renode_tester shield's Base (default) layer is a 2x2 keymap:
 //   &kp A  &kp B
 //   &kp C  &kp D
 // so the keymap grid renders the four key labels A / B / C / D (positions 0..3).
+// (The multi-layer DUT adds Lower/Raise/Adjust layers, but this spec only
+// touches the Base layer, whose A/B/C/D bindings are unchanged.)
 const RENODE_TESTER_KEYS = ["A", "B", "C", "D"];
 // A keycode NOT already in the default keymap, so its appearance in the grid is
 // an unambiguous proof that our edit took effect (and round-tripped).
 const NEW_KEYCODE = "F";
-
-// Reproduce the exact connect flow proven by tests/connect.spec.ts: install the
-// navigator.serial shim (backed by the WS bridge -> the DUT's emulated USB CDC in
-// Renode), pre-accept the notice + force English, reduce motion, click the real
-// "Connect via USB" button, and wait until the app reaches the fully-connected
-// screen (the device's own name in the header).
-async function connect(page: Page) {
-  const logs: string[] = [];
-  page.on("console", (m) => {
-    const line = `[${m.type()}] ${m.text()}`;
-    logs.push(line);
-    if (process.env.E2E_DEBUG) console.log("PAGE " + line);
-  });
-  page.on("pageerror", (e) => {
-    if (process.env.E2E_DEBUG) console.log("PAGE ERROR " + e.message);
-  });
-
-  await page.addInitScript(serialShimSource(WS_URL));
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem(
-        "dya-studio-connection-notice-accepted-serial",
-        "1.1.0",
-      );
-      localStorage.setItem("dya-studio-language", "en");
-    } catch {
-      /* ignore */
-    }
-  });
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/");
-
-  const usbButton = page.getByRole("button", { name: /Connect via USB/i });
-  await expect(usbButton).toBeVisible();
-  await usbButton.click({ force: true });
-
-  // Full connect handshake done: the header shows the device's own name and the
-  // splash button is gone.
-  await expect(page.locator("header").getByText(DEVICE_NAME)).toBeVisible({
-    timeout: 60_000,
-  });
-  await expect(usbButton).toBeHidden();
-}
 
 // A key in the on-screen physical-keymap grid renders its binding's short label
 // (for `&kp A` that's just "A") in a span. Match that label exactly.
