@@ -55,6 +55,11 @@ VENDOR_ROOT = Path(__file__).resolve().parent
 VENDOR_PLATFORMS = VENDOR_ROOT / "platforms"
 DYA2_REPL = "xiao_nrf52840_usb_pmw3610.repl"
 DYA2_RESC = "dya2_single.resc"
+# Two-machine wired-split boot (see the blocker note in boot_dya2_wired_split):
+# the central on the USB+PMW3610 platform + a real peripheral half on the
+# Python-stub platform, uart0s cross-connected as the half-duplex split wire.
+DYA2_PERIPHERAL_REPL = "xiao_nrf52840_dya2_peripheral.repl"
+DYA2_WIRED_SPLIT_RESC = "dya2_wired_split.resc"
 
 
 def _want_dya2(elf: Path) -> bool:
@@ -70,19 +75,24 @@ def _want_dya2(elf: Path) -> bool:
     return "dya2" in name or "trackball" in name
 
 
-def _materialize_dya2_repl() -> str:
-    """Write a temp copy of the vendored combined repl with the model
+def _materialize_repl(repl_name: str, prefix: str = "dya2-") -> str:
+    """Write a temp copy of a vendored repl with the model
     `filename:`/`include @platforms/models/...` paths rewritten to absolute
     against e2e/renode/platforms (Renode resolves neither against the .repl dir
     nor its cwd). Returns the temp path (caller unlinks after load)."""
-    template = (VENDOR_PLATFORMS / DYA2_REPL).read_text()
+    template = (VENDOR_PLATFORMS / repl_name).read_text()
     abs_models = str((VENDOR_PLATFORMS / "models").resolve())
     repl = template.replace('filename: "platforms/models/', f'filename: "{abs_models}/')
     repl = repl.replace("include @platforms/models/", f"include @{abs_models}/")
-    fd, path = tempfile.mkstemp(prefix="dya2-usb-pmw3610-", suffix=".repl")
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=".repl")
     with os.fdopen(fd, "w") as fh:
         fh.write(repl)
     return path
+
+
+def _materialize_dya2_repl() -> str:
+    """Materialize the vendored combined USB+PMW3610 repl (single-machine dya2)."""
+    return _materialize_repl(DYA2_REPL, prefix="dya2-usb-pmw3610-")
 
 
 def boot_dya2_real(renode_path, elf, port_base, boot_wait):
@@ -120,6 +130,73 @@ def boot_dya2_real(renode_path, elf, port_base, boot_wait):
         raise
     finally:
         for tmp in (repl_path, ff_path):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return session, console, rpc
+
+
+def boot_dya2_wired_split(renode_path, central_elf, peripheral_elf, port_base, boot_wait):
+    """Boot the dya2 wired split as TWO machines -- central (dya2_right, the real
+    studio-rpc-usb-uart image on the USB+PMW3610 platform) + peripheral
+    (dya2_left, the real wired-split half on the Python-stub platform) -- with
+    their uart0 split links cross-connected through one UART hub (half-duplex).
+
+    THE BLOCKER THIS FIXES: booted alone (no peer), the dya2 central's
+    zmk,wired-split machinery (uart0, half-duplex, INTERRUPT mode) starves the
+    Zephyr USB device work-queue thread, so USB enumeration stalls after
+    SET_ADDRESS and dya-studio can never connect. Giving the wired link a real
+    peripheral peer lets the split handshake complete and frees the USB WQ.
+
+    Mirrors H.boot_usb_wired_split (two machines, NVS-0xFF preload per ZMK half,
+    central left selected so the caller's attach_dual_cdc_bridge targets it) but
+    (a) cross-connects uart0, not uart1 (dya2's wired-split device is &uart0),
+    and (b) loads the vendored dya2 repls. Returns (session, console, rpc) where
+    console = the central's idle uart1 terminal and rpc = the peripheral's idle
+    uart1 terminal (both real images are CONSOLE=n silent; kept only so this
+    process owns one terminal per machine, matching the single-machine path)."""
+    central_repl = _materialize_repl(DYA2_REPL, prefix="dya2-central-")
+    peripheral_repl = _materialize_repl(DYA2_PERIPHERAL_REPL, prefix="dya2-peripheral-")
+    ff_path = H._write_ff_binary(H.STORAGE_SIZE_DEFAULT)
+    central_diag_port = port_base + 1
+    peripheral_diag_port = port_base + 2
+    session = H.RenodeSession(
+        renode_path,
+        VENDOR_PLATFORMS / DYA2_WIRED_SPLIT_RESC,
+        monitor_port=port_base,
+        variables={
+            "central_bin": f"@{central_elf}",
+            "peripheral_bin": f"@{peripheral_elf}",
+            "central_platform": f"@{central_repl}",
+            "peripheral_platform": f"@{peripheral_repl}",
+            "central_diag_port": central_diag_port,
+            "peripheral_diag_port": peripheral_diag_port,
+        },
+        cwd=VENDOR_ROOT,
+    )
+    session.rtt_socket = None
+    try:
+        session.start(boot_wait=boot_wait)
+        # connect_uart blocks until the resc's CreateServerSocketTerminal lines
+        # have run, so both temp repls have been consumed by here.
+        console = session.connect_uart(central_diag_port)  # central uart1 (idle)
+        rpc = session.connect_uart(peripheral_diag_port)  # peripheral uart1 (idle)
+        assert session.mon is not None
+        # Preload each ZMK half's erased NVS sectors before the CPUs run.
+        # LoadBinary is machine-scoped; select each half, then leave the CENTRAL
+        # selected so attach_dual_cdc_bridge (sysbus.usbd ...) targets it.
+        for mach in ("dya2_left", "dya2_right"):
+            session.mon.execute(f'mach set "{mach}"')
+            session.mon.execute(
+                f"sysbus LoadBinary @{ff_path} {hex(H.STORAGE_ADDR_DEFAULT)}"
+            )
+        session.go()
+    except Exception:
+        session.stop()
+        raise
+    finally:
+        for tmp in (central_repl, peripheral_repl, ff_path):
             try:
                 os.unlink(tmp)
             except OSError:
@@ -211,17 +288,40 @@ def main() -> None:
     port_base = int(os.environ.get("RENODE_PORT_BASE", "0")) or random.randint(26000, 40000)
     console_port = port_base + 1
     relay_port = port_base + 6
-    boot_settle = float(os.environ.get("RENODE_BOOT_SETTLE", "8"))
-    wiring_timeout = float(os.environ.get("RENODE_WIRING_TIMEOUT", "30"))
+
+    # Two machines (dya2 central + wired peripheral) is much heavier than a
+    # single machine: the peripheral's BLE stack and the half-duplex wired-split
+    # traffic burn host CPU, so the shared emulation runs well under realtime and
+    # the CENTRAL's USB enumeration + CDC wiring completes only after ~90s of wall
+    # clock (measured), far beyond the single-machine 30s default. Use much longer
+    # settle/wiring defaults for that path (still overridable via env).
+    two_machine_dya2 = bool(_want_dya2(elf) and os.environ.get("DYA2_PERIPHERAL_ELF", "").strip())
+    boot_settle = float(os.environ.get("RENODE_BOOT_SETTLE", "20" if two_machine_dya2 else "8"))
+    wiring_timeout = float(
+        os.environ.get("RENODE_WIRING_TIMEOUT", "150" if two_machine_dya2 else "30")
+    )
     # Renode's mono cold-start can take ~15-20s on a loaded box; boot_single_real
     # waits boot_wait + 10s for the monitor, so give margin.
-    boot_wait = float(os.environ.get("RENODE_BOOT_WAIT", "20"))
+    boot_wait = float(os.environ.get("RENODE_BOOT_WAIT", "45" if two_machine_dya2 else "20"))
 
     # Boot the real flashable image on the NRF_USBD_Full usb platform. console =
     # uart0 (silent on a real image), rpc = idle uart1 -- both owned for symmetry.
     # A dya2 DUT boots on the vendored USB+PMW3610 platform instead, so the
     # trackball model is present (Studio still rides USB CDC exactly the same).
-    if _want_dya2(elf):
+    peripheral_elf_env = os.environ.get("DYA2_PERIPHERAL_ELF", "").strip()
+    if _want_dya2(elf) and peripheral_elf_env:
+        peripheral_elf = Path(peripheral_elf_env).resolve()
+        if not peripheral_elf.exists():
+            raise SystemExit(f"DYA2_PERIPHERAL_ELF not found: {peripheral_elf}")
+        print(
+            "dya2 platform: TWO machines (central USB CDC + PMW3610, peripheral "
+            f"wired-split); split link on uart0; peripheral={peripheral_elf}",
+            file=sys.stderr,
+        )
+        session, console, rpc = boot_dya2_wired_split(
+            renode, elf, peripheral_elf, port_base, boot_wait
+        )
+    elif _want_dya2(elf):
         print("dya2 platform: USB CDC + simulated PMW3610 trackball", file=sys.stderr)
         session, console, rpc = boot_dya2_real(renode, elf, port_base, boot_wait)
     else:

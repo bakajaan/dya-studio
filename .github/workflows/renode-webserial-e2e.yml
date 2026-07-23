@@ -40,6 +40,13 @@ jobs:
   #   manifest - west init -l manifest (relative to that repo)
   #   build    - the `west zmk-build ...` invocation (its cmake-args merged in)
   #   elf      - path (relative to the west topdir) of the produced zmk.elf
+  #   peripheral_build - ("" = none) a second `west zmk-build ...` for a wired
+  #              split PERIPHERAL half; when set, renode_serve.py boots TWO
+  #              machines (central + this peripheral, uart0 split links
+  #              cross-connected) so the central's wired-split link has a peer
+  #              and enumerates USB. dya2 needs this (see firmware/README.md).
+  #   peripheral_elf - path of the peripheral zmk.elf (forwarded as
+  #              DYA2_PERIPHERAL_ELF); "" when peripheral_build is "".
   #   device   - the name the DUT advertises via GetDeviceInfo (DEVICE_NAME)
   #   platform - RENODE_PLATFORM for renode_serve.py ("" = harness USB platform,
   #              "dya2" = vendored USB+PMW3610 trackball platform)
@@ -69,6 +76,8 @@ jobs:
               "manifest": "scripts/west-test-standalone.yml",
               "build": "west zmk-build tests/zmk-config --build-yaml tests/zmk-config/build-ble.yaml --cmake-args ' -DCONFIG_ZMK_STUDIO_LOCKING=n' -af ble -d build",
               "elf": "build/ble/zephyr/zmk.elf",
+              "peripheral_build": "",
+              "peripheral_elf": "",
               "device": "Renode",
               "platform": "",
               "specs": "tests/common tests/official",
@@ -81,6 +90,8 @@ jobs:
               "manifest": "config/west-workspace.yml",
               "build": "west zmk-build config -af right_trackball_studio_unlocked -d build",
               "elf": "build/right_trackball_studio_unlocked/zephyr/zmk.elf",
+              "peripheral_build": "west zmk-build config -af left -d build",
+              "peripheral_elf": "build/left/zephyr/zmk.elf",
               "device": "DYA2",
               "platform": "dya2",
               "specs": "tests/common tests/dya2",
@@ -120,6 +131,17 @@ jobs:
         with:
           name: dut-elf-${{ matrix.dut.id }}
           path: ${{ matrix.dut.elf }}
+      # Wired-split DUTs (dya2) also build a PERIPHERAL half; the e2e boots it as
+      # the second machine so the central's wired-split link has a peer.
+      - name: Build DUT peripheral (wired-split half)
+        if: matrix.dut.peripheral_build != ''
+        run: ${{ matrix.dut.peripheral_build }}
+      - name: Upload DUT peripheral ELF
+        if: matrix.dut.peripheral_build != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: dut-elf-${{ matrix.dut.id }}-peripheral
+          path: ${{ matrix.dut.peripheral_elf }}
 
   e2e:
     name: e2e (${{ matrix.dut.id }})
@@ -161,6 +183,12 @@ jobs:
         with:
           name: dut-elf-${{ matrix.dut.id }}
           path: fw
+      - name: Download DUT peripheral ELF (wired split)
+        if: matrix.dut.peripheral_build != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: dut-elf-${{ matrix.dut.id }}-peripheral
+          path: fw-peripheral
 
       - name: Install e2e deps (Playwright + ws)
         working-directory: e2e/renode
@@ -178,6 +206,9 @@ jobs:
           DIST_DIR: ${{ github.workspace }}/dist
           DEVICE_NAME: ${{ matrix.dut.device }}
           RENODE_PLATFORM: ${{ matrix.dut.platform }}
+          # When the DUT has a wired-split peripheral, forward it so renode_serve
+          # boots two machines (central + peripheral, uart0 links cross-connected).
+          DYA2_PERIPHERAL_ELF: ${{ matrix.dut.peripheral_build != '' && format('{0}/fw-peripheral/zmk.elf', github.workspace) || '' }}
         run: bash run-local.sh "${{ github.workspace }}/fw/zmk.elf" ${{ matrix.dut.specs }}
 
       - name: Upload Playwright artifacts on failure

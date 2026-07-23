@@ -84,11 +84,14 @@ DEVICE_NAME=Renode \
 
 ### `dya2-unlocked` — the real dya2 trackball DUT (experimental)
 
-The real dya2 keyboard's central image, built from
+The real dya2 keyboard, built from
 [cormoran/zmk-keyboard-dya2](https://github.com/cormoran/zmk-keyboard-dya2)
-(branch `support-new-zmk-modules`). It is a split **central** advertising name
-**"DYA2"**, runs Studio over USB CDC, boots **unlocked**, and carries the
-PMW3610 trackball on its own SPI0.
+(branch `support-new-zmk-modules`). It is a **wired split** whose **central**
+(`right_trackball_studio_unlocked`) advertises name **"DYA2"**, runs Studio over
+USB CDC, boots **unlocked**, and carries the PMW3610 trackball on its own SPI0.
+Its inter-half link is `zmk,wired-split` on **uart0** (half-duplex, 19200 baud,
+RX/TX both P0.03), so the central needs a **peripheral peer** to boot cleanly —
+the harness boots it as **two machines** (see the recipe below).
 
 ```bash
 git clone -b support-new-zmk-modules https://github.com/cormoran/zmk-keyboard-dya2
@@ -96,45 +99,73 @@ cd zmk-keyboard-dya2
 west init -l . --mf config/west-workspace.yml   # pins cormoran/zmk main+dya + ~20 feature modules
 west update --narrow
 west zephyr-export
+# central (DUT) + peripheral (wired-split peer) -- BOTH halves are needed
 west zmk-build config -af right_trackball_studio_unlocked -d build
-# -> build/right_trackball_studio_unlocked/zephyr/zmk.elf   (DEVICE_NAME=DYA2)
+west zmk-build config -af left -d build
+# -> build/right_trackball_studio_unlocked/zephyr/zmk.elf   (central, DEVICE_NAME=DYA2)
+# -> build/left/zephyr/zmk.elf                              (wired-split peripheral)
 ```
 
-Confirm unlocked: `.config` has `# CONFIG_ZMK_STUDIO_LOCKING is not set`,
-`CONFIG_ZMK_KEYBOARD_NAME="DYA2"`, `CONFIG_PMW3610=y`.
+Confirm the central is unlocked: `.config` has
+`# CONFIG_ZMK_STUDIO_LOCKING is not set`, `CONFIG_ZMK_KEYBOARD_NAME="DYA2"`,
+`CONFIG_PMW3610=y`.
 
-Run it on the vendored USB+PMW3610 Renode platform (adds the simulated
-trackball so the Trackball tab / pointer motion is exercisable):
+Run the two-machine wired split (`DYA2_PERIPHERAL_ELF` selects it):
 
 ```bash
 cd ..                      # e2e/renode
 ZMK_WC_RENODE_LIB=/path/to/zmk-west-commands/scripts/lib/renode \
 DEVICE_NAME=DYA2 RENODE_PLATFORM=dya2 \
+DYA2_PERIPHERAL_ELF=/path/to/build/left/zephyr/zmk.elf \
   bash run-local.sh /path/to/build/right_trackball_studio_unlocked/zephyr/zmk.elf \
   tests/common tests/dya2
 ```
 
-`RENODE_PLATFORM=dya2` makes `renode_serve.py` boot
-`platforms/xiao_nrf52840_usb_pmw3610.repl` (the harness USB real-binary platform
-merged with the PMW3610 trackball on SPIM0 + the LATCH-aware gpio1). Inject
-pointer motion over the monitor: `sysbus.spi0.trackball QueueMotion <dx> <dy>`.
+`RENODE_PLATFORM=dya2` + `DYA2_PERIPHERAL_ELF` makes `renode_serve.py` boot
+`platforms/dya2_wired_split.resc`: the **central** on
+`xiao_nrf52840_usb_pmw3610.repl` (USB real-binary platform + PMW3610 trackball on
+SPIM0 + LATCH-aware gpio1) and the **peripheral** on
+`xiao_nrf52840_dya2_peripheral.repl` (Python-stub real platform: usbd/qspi/ficr/
+nvmc stubs, no USB CDC bridge), with **both halves' uart0 cross-connected through
+one Renode UART hub** (the half-duplex split wire). Studio still rides the
+central's USB CDC exactly as in single-machine mode. Inject pointer motion over
+the monitor on the central machine:
+`sysbus.dya2_right.spi0.trackball QueueMotion <dx> <dy>`. Without
+`DYA2_PERIPHERAL_ELF`, `renode_serve.py` falls back to the single-machine
+`dya2_single.resc` (central only) — which does **not** enumerate USB (see below).
 
-> **Known blocker (why this DUT is `experimental` in CI).** The real dya2 image
-> does **not** complete USB enumeration in Renode, so dya-studio cannot connect
-> to it yet. The device ACKs `SET_ADDRESS` (handled at ISR level by the nrfx
-> USBD driver) but never answers `GET_DESCRIPTOR(CONFIGURATION)` /
-> `SET_CONFIGURATION` — the Zephyr USB device work-queue thread never services
-> control transfers. The identical harness/platform enumerates the official DUT
-> fully (166-byte config descriptor, CDC wired), so it is the dya2 **image**,
-> not the platform or the trackball model (it fails identically on the plain USB
-> platform _and_ the combined trackball platform, which loads spi0 + PMW3610
-> correctly). dya2 is a heavy dual-transport (BLE central + wired) split
-> **central** with ~20 feature modules; that boot workload appears to
-> starve/block the USB device thread. The DUT's build is verified and it fans
-> out through the matrix; its e2e job is `continue-on-error` until the USB
-> blocker is resolved (candidate next steps: boot with the wired split
-> peripheral present so the split machinery settles, or bump the USB thread
-> priority / defer heavy module init).
+> **Why two machines (root cause of the old "USB never enumerates" blocker).**
+> Three dya2-specific issues had to be handled in the vendored platforms +
+> harness; the previous single-machine boot hit all three:
+>
+> 1. **`nfct-pins-as-gpios` reset loop.** dya2's DT frees the NFC pins as GPIO.
+>    Zephyr's nRF `SystemInit` reads `UICR.NFCPINS`, and because Renode's SVD
+>    returns `0xFFFFFFFF` (NFC enabled) and drops the firmware's UICR write, it
+>    `NVIC_SystemReset()`s on **every** boot. A `SYSRESETREQ` resets VTOR to 0
+>    (empty flash; the image is at 0x27000), so the CPU **halted before any
+>    firmware ran** — the USBD hardware model alone then ACKs `SET_ADDRESS` but
+>    nothing answers `GET_DESCRIPTOR`, exactly the symptom seen. Fixed by an
+>    `NFCPINS=0xFFFFFFFE` tag in both repls (bit0 clear ⇒ GPIO already
+>    configured ⇒ SystemInit skips the reset).
+> 2. **Unmodeled SPIM3 (WS2812 LED strip) ⇒ watchdog reboot.** dya2's animation
+>    drives an SK6812 strip on `&spi3` (0x4002F000). Unmodeled, the WS2812
+>    EasyDMA transfer never raises `EVENTS_END`, the animation work blocks
+>    forever, the central's watchdog feed starves, and it software-reboots ~10s
+>    in. Fixed by modeling `spi3` as a plain EasyDMA SPIM in both repls.
+> 3. **Wired-split link needs a peer.** Even booting cleanly, the central's
+>    `zmk,wired-split` machinery (uart0, half-duplex, INTERRUPT mode) with **no
+>    peripheral** keeps USB from wiring. Giving uart0 a real peripheral peer
+>    (the second machine) lets USB enumerate and the Studio CDC wire.
+>
+> With all three addressed, the central **does** complete USB enumeration and
+> dya-studio fully connects (`tests/common/connect.spec.ts` passes). It is still
+> `experimental`/`continue-on-error` because the two-machine boot is heavy and
+> slow: the CDC wires only after **~90–130 s** of wall clock (hence the longer
+> `RENODE_WIRING_TIMEOUT`/readiness waits), and the half-duplex split link floods
+> the central with `Prefix mismatch` RX (Renode doesn't model the half-duplex
+> PSEL TX/RX turnaround), which can starve the central's watchdog and reboot it
+> — so runs are occasionally flaky. Connect is reliable in practice but not yet
+> hardened, so the job stays non-blocking.
 
 ## Adding a DUT
 
@@ -143,5 +174,8 @@ Append one entry to the `duts` JSON in the `matrix` job of
 source (`repo`/`ref`/`manifest`/`build`/`elf`), its `device` name, its Renode
 `platform` (`""` harness USB, `dya2` USB+trackball), its `specs` dirs
 (`tests/common` for all, plus `tests/official` or `tests/dya2`), and an
-`experimental` flag (allow the e2e job to fail). Both the build and e2e jobs fan
-out over it automatically.
+`experimental` flag (allow the e2e job to fail). A **wired-split** DUT also sets
+`peripheral_build`/`peripheral_elf` for its second half; the build job builds +
+uploads it and the e2e job downloads it and forwards it as `DYA2_PERIPHERAL_ELF`
+so `renode_serve.py` boots two machines. Both the build and e2e jobs fan out over
+the list automatically.
