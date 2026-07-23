@@ -83,7 +83,14 @@ jobs:
     name: Compute DUT matrix
     runs-on: ubuntu-latest
     outputs:
+      # duts: every DUT (build-dut fans out over this -- all firmware builds on
+      # every PR). e2e_duts: the DUTs whose e2e runs for THIS event -- all on
+      # manual dispatch, but only non-experimental ones on push/PR (the heavy
+      # dya2 emulation can't wire USB CDC on a stock 2-core runner within the
+      # timeout, so its e2e would only ever go red; it stays runnable via
+      # workflow_dispatch / a beefier runner, and its firmware still builds).
       duts: ${{ steps.set.outputs.duts }}
+      e2e_duts: ${{ steps.set.outputs.e2e_duts }}
     steps:
       - id: set
         run: |
@@ -126,6 +133,11 @@ jobs:
           ]
           JSON
           echo "duts=$(jq -c . duts.json)" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "e2e_duts=$(jq -c . duts.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "e2e_duts=$(jq -c '[.[] | select(.experimental == false)]' duts.json)" >> "$GITHUB_OUTPUT"
+          fi
 
   build-dut:
     name: Build DUT (${{ matrix.dut.id }})
@@ -188,21 +200,16 @@ jobs:
     needs: [matrix, build-dut]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Experimental DUTs (e.g. dya2) run their e2e only on manual dispatch: their
-    # firmware still BUILDS on every PR (build-dut above), but the heavy
-    # two-machine dya2 emulation cannot wire its USB CDC within the timeout on a
-    # stock 2-core GitHub runner (it needs ~90-130s to enumerate locally on a
-    # multi-core box; the runner never gets there) -- so running it on every PR
-    # only produces a misleading red check. The specs are verified locally and
-    # can be exercised here via workflow_dispatch (or on a beefier/self-hosted
-    # runner). Non-experimental DUTs (official) always run. continue-on-error
-    # still applies on dispatch so a slow run never turns the workflow red.
-    if: ${{ !matrix.dut.experimental || github.event_name == 'workflow_dispatch' }}
+    # The e2e fans out over e2e_duts (the matrix job filters experimental DUTs
+    # out on push/PR, keeping them on workflow_dispatch) -- so dya2's heavy
+    # emulation, which can't wire USB CDC on a stock 2-core runner within the
+    # timeout, never turns a PR red. continue-on-error still guards a slow
+    # dispatch run.
     continue-on-error: ${{ matrix.dut.experimental }}
     strategy:
       fail-fast: false
       matrix:
-        dut: ${{ fromJSON(needs.matrix.outputs.duts) }}
+        dut: ${{ fromJSON(needs.matrix.outputs.e2e_duts) }}
     steps:
       - name: Checkout dya-studio
         uses: actions/checkout@v5
