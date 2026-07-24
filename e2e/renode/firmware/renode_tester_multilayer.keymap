@@ -1,0 +1,40 @@
+#include <behaviors.dtsi>
+#include <dt-bindings/zmk/keys.h>
+
+/ {
+	keymap {
+		compatible = "zmk,keymap";
+
+		default_layer {
+			display-name = "Base";
+			bindings = <
+			&kp A &kp B
+			&kp C &kp D
+			>;
+		};
+
+		lower_layer {
+			display-name = "Lower";
+			bindings = <
+			&kp N1 &kp N2
+			&kp N3 &kp N4
+			>;
+		};
+
+		raise_layer {
+			display-name = "Raise";
+			bindings = <
+			&kp F1 &kp F2
+			&kp F3 &kp F4
+			>;
+		};
+
+		adjust_layer {
+			display-name = "Adjust";
+			bindings = <
+			&kp X &kp Y
+			&kp Z &kp W
+			>;
+		};
+	};
+};

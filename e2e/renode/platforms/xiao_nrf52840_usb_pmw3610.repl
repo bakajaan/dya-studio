@@ -1,0 +1,198 @@
+// XIAO nRF52840 platform for Renode -- USB (Studio CDC) + PMW3610 trackball.
+//
+// This is the SINGLE-machine dya2 DUT platform: it is the USB real-binary
+// platform (xiao_nrf52840_usb.repl from zmk-west-commands, NRF_USBD_Full +
+// QSPI/FICR/NVMC stubs so the real flashable studio-rpc-usb-uart image boots
+// and enumerates USB CDC) MERGED with the simulated PMW3610 trackball on
+// SPIM0 (PMW3610.cs) and the LATCH-aware gpio1 (NRF52840_GPIO_WithLatch.cs)
+// the level-triggered motion IRQ needs.
+//
+// Differences vs the plain USB repl:
+//   - twi0 @ 0x40003000 (I2C) is replaced by spi0 (SPI.NRF52840_SPI, easyDMA)
+//     -- the nRF52840 muxes TWI0/SPI0/SPIM0 on one base address, and dya2's
+//     right-trackball snippet puts the sensor on &spi0 as "nordic,nrf-spim".
+//   - trackball (SPI.PMW3610) hangs off spi0; its motion IRQ output (MotionPin)
+//     drives gpio1 pin 14 (dya2 irq-gpios = &xiao_d 9 = P1.14).
+//   - gpio1 becomes NRF52840_GPIO_WithLatch and routes its pin 15 (dya2
+//     cs-gpios = &xiao_d 10 = P1.15) to the trackball's CS input 0 (Renode's
+//     SPIM model never signals transaction boundaries to the peripheral, so
+//     the model frames SPI transactions on CS edges).
+//   SCK/MOSI/MISO psels are internal to Renode's register-based SPIM model, so
+//   no pinctrl reconciliation is needed.
+//
+// The three C# models are ad-hoc compiled via `preinit: include` (no Renode
+// rebuild). renode_serve.py rewrites the repo-relative `filename:`/`include`
+// paths to absolute against e2e/renode/platforms before load.
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu@0
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+
+uart0: UART.NRF52840_UART @ sysbus 0x40002000
+    easyDMA: true
+    -> nvic@2
+
+uart1: UART.NRF52840_UART @ sysbus 0x40028000
+    easyDMA: true
+    -> nvic@40
+
+rtc0: Timers.NRF52840_RTC @ sysbus 0x4000B000
+    numberOfEvents: 3
+    -> nvic@11
+
+rtc1: Timers.NRF52840_RTC @ sysbus 0x40011000
+    numberOfEvents: 3
+    -> nvic@17
+
+rtc2: Timers.NRF52840_RTC @ sysbus 0x40024000
+    numberOfEvents: 4
+    -> nvic@36
+
+wdt: Timers.NRF52840_Watchdog @ sysbus 0x40010000
+    -> nvic@16
+
+ppi: Miscellaneous.NRF52840_PPI @ sysbus 0x4001F000
+
+flash: Memory.MappedMemory @ sysbus 0x0
+    size: 0x100000
+
+ram: Memory.MappedMemory @ { sysbus 0x800000; sysbus 0x20000000 }
+    size: 0x40000
+
+clock: Miscellaneous.NRF_CLOCK @ sysbus 0x40000000
+    -> nvic@0
+
+// SPIM0 @ 0x40003000 (replaces the stock twi0 I2C at the same muxed address);
+// the PMW3610 trackball is the attached peripheral. CS framing comes from
+// gpio1.15 (below), the motion IRQ goes back out on gpio1.14.
+spi0: SPI.NRF52840_SPI @ sysbus 0x40003000
+    easyDMA: true
+    -> nvic@0x3
+
+trackball: SPI.PMW3610 @ spi0
+    preinit:
+        include @platforms/models/PMW3610.cs
+    MotionPin -> gpio1@14
+
+spi2: SPI.NRF52840_SPI @ sysbus 0x40023000
+    -> nvic@0x23
+
+// SPIM3 @ 0x4002F000 drives the SK6812/WS2812 LED strip (dya2's animation on
+// &spi3, MOSI=P0.09). Without a model the WS2812 EasyDMA transfer never raises
+// EVENTS_END, so the animation work blocks forever, starving the watchdog feed
+// -> the firmware software-reboots (SYSRESETREQ) ~10s in. Modeling it as a
+// plain EasyDMA SPIM lets the transfer complete (there is no attached device;
+// the bytes are clocked to nothing, which is all the driver needs).
+spi3: SPI.NRF52840_SPI @ sysbus 0x4002F000
+    easyDMA: true
+    -> nvic@47
+
+gpio0: GPIOPort.NRF52840_GPIO @ sysbus 0x50000500
+
+// gpio1 carries the sensor's level-triggered motion IRQ (P1.14), so it needs a
+// working LATCH register (NRF52840_GPIO_WithLatch); pin 15 = the SPI CS the
+// PMW3610 frames transactions on.
+gpio1: GPIOPort.NRF52840_GPIO_WithLatch @ sysbus 0x50000800
+    preinit:
+        include @platforms/models/NRF52840_GPIO_WithLatch.cs
+    15 -> trackball@0
+
+gpiote: GPIOPort.NRF52840_GPIOTasksEvents @ sysbus 0x40006000
+    port0: gpio0
+    port1: gpio1
+    -> nvic@6
+
+twi1: I2C.NRF52840_I2C @ sysbus 0x40004000
+    -> nvic@4
+
+timer0: Timers.NRF52840_Timer @ sysbus 0x40008000
+    numberOfEvents: 4
+    -> nvic@8
+
+timer1: Timers.NRF52840_Timer @ sysbus 0x40009000
+    numberOfEvents: 4
+    -> nvic@9
+
+timer2: Timers.NRF52840_Timer @ sysbus 0x4000A000
+    numberOfEvents: 4
+    -> nvic@10
+
+timer3: Timers.NRF52840_Timer @ sysbus 0x4001A000
+    numberOfEvents: 6
+    -> nvic@26
+
+timer4: Timers.NRF52840_Timer @ sysbus 0x4001B000
+    numberOfEvents: 6
+    -> nvic@27
+
+i2s: Sound.NRF52840_I2S @ sysbus 0x40025000
+    -> nvic@37
+
+pdm: Sound.NRF52840_PDM @ sysbus 0x4001D000
+    -> nvic@29
+
+radio: Wireless.NRF52840_Radio @ sysbus 0x40001000
+    -> nvic@1
+
+rng: Miscellaneous.NRF52840_RNG @ sysbus 0x4000D000
+    -> nvic@13
+
+ecb: Miscellaneous.NRF52840_ECB @ sysbus 0x4000E000
+    -> nvic@14
+
+egu0 : Miscellaneous.NRF52840_EGU @ sysbus 0x40014000
+    -> nvic@20
+
+egu1 : Miscellaneous.NRF52840_EGU @ sysbus 0x40015000
+    -> nvic@21
+
+egu2 : Miscellaneous.NRF52840_EGU @ sysbus 0x40016000
+    -> nvic@22
+
+egu3 : Miscellaneous.NRF52840_EGU @ sysbus 0x40017000
+    -> nvic@23
+
+egu4 : Miscellaneous.NRF52840_EGU @ sysbus 0x40018000
+    -> nvic@24
+
+egu5 : Miscellaneous.NRF52840_EGU @ sysbus 0x40019000
+    -> nvic@25
+
+// NFCPINS Tag below: dya2 sets nfct-pins-as-gpios, so Zephyr SystemInit reads
+// UICR.NFCPINS and, if bit0 (PROTECT=NFC) is set, rewrites UICR and does an
+// NVIC_SystemReset() to switch the NFC pins to GPIO. Renode's SVD returns
+// NFCPINS=0xFFFFFFFF (bit0=1) and drops the firmware write, so every boot
+// resets -- and a SYSRESETREQ resets VTOR to 0 (empty flash at 0x0; the image
+// is at 0x27000), halting the CPU before any firmware runs. Serving NFCPINS
+// with bit0 clear (GPIO already configured) makes SystemInit skip the reset so
+// the image boots straight through.
+sysbus:
+    init:
+        ApplySVD @https://dl.antmicro.com/projects/renode/svd/NRF52840.svd.gz
+        Tag <0x10001200, 0x10001203> "PSELRESET"
+        Tag <0x1000120c, 0x1000120f> "NFCPINS" 0xFFFFFFFE
+
+// --- Real-binary stubs: let a USB CDC + QSPI + BLE image boot unmodified ---
+
+qspi: Python.PythonPeripheral @ sysbus 0x40029000
+    size: 0x1000
+    initable: true
+    filename: "platforms/models/qspi_stub.py"
+
+usbd: USB.NRF_USBD_Full @ sysbus 0x40027000
+    preinit:
+        include @platforms/models/NRF_USBD_Full.cs
+    -> nvic@39
+
+ficr: Python.PythonPeripheral @ sysbus 0x10000000
+    size: 0x1000
+    initable: true
+    filename: "platforms/models/ficr.py"
+
+nvmc: Python.PythonPeripheral @ sysbus 0x4001E000
+    size: 0x1000
+    initable: true
+    filename: "platforms/models/nvmc.py"

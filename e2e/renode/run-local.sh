@@ -20,6 +20,11 @@ export ZMK_WC_RENODE_LIB="${ZMK_WC_RENODE_LIB:?set ZMK_WC_RENODE_LIB to zmk-west
 export WS_PORT="${WS_PORT:-8788}"
 export WS_URL="ws://127.0.0.1:${WS_PORT}"
 export DEVICE_NAME="${DEVICE_NAME:-Renode}"
+# dya2 two-machine wired split: when a peripheral ELF is provided, renode_serve.py
+# boots the central (arg $1) + this peripheral as two machines with their uart0
+# split links cross-connected, so the central's wired-split link has a peer and
+# stops starving USB enumeration. Forwarded via the environment.
+export DYA2_PERIPHERAL_ELF="${DYA2_PERIPHERAL_ELF:-}"
 
 pids=()
 cleanup() {
@@ -35,9 +40,17 @@ pids+=($!)
 
 # Booting the real image, enumerating USB and wiring the CDC bridge is slower
 # than a bare UART boot -- and Renode's mono cold-start can take ~20s on a loaded
-# box -- so allow generous time for RENODE_READY.
+# box -- so allow generous time for RENODE_READY. The dya2 two-machine wired
+# split is heavier still (a second machine's BLE stack + half-duplex split
+# traffic slow the shared emulation), so its CDC wires only after ~90s+; wait
+# much longer when a peripheral ELF is provided.
+if [ -n "${DYA2_PERIPHERAL_ELF:-}" ]; then
+  default_ready_timeout=320
+else
+  default_ready_timeout=180
+fi
 RPC_PORT=""
-for _ in $(seq 1 "${RENODE_READY_TIMEOUT:-180}"); do
+for _ in $(seq 1 "${RENODE_READY_TIMEOUT:-$default_ready_timeout}"); do
   RPC_PORT="$(sed -n 's/^RPC_PORT=//p' renode_serve.out | head -1)"
   [ -n "$RPC_PORT" ] && grep -q RENODE_READY renode_serve.out && break
   sleep 1

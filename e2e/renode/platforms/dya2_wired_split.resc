@@ -1,0 +1,68 @@
+:name: dya2 wired split -- central Studio over USB CDC + wired split link (uart0) to a real peripheral
+:description: Two machines. central (dya2_right) = the real studio-rpc-usb-uart image
+:description: on the USB+PMW3610 platform, Studio over emulated USB CDC; peripheral
+:description: (dya2_left) = the real wired-split half on a Python-stub platform. Both
+:description: halves' uart0 (the zmk,wired-split half-duplex link, 19200 baud, P0.03)
+:description: are cross-connected through ONE Renode UART hub so the central's
+:description: wired-split machinery has a peer and stops starving the USB work-queue.
+:description: renode_serve.py preloads each half's NVS, `start`s, then attaches the
+:description: DualCdcAcmBridge to the CENTRAL.
+
+# WHY two machines: booted alone, the dya2 central's zmk,wired-split transport
+# (uart0, half-duplex, INTERRUPT mode) never sees a peer, and its split
+# machinery starves the Zephyr USB device work-queue thread -- SET_ADDRESS is
+# ACKed in ISR but GET_DESCRIPTOR(CONFIGURATION)/SET_CONFIGURATION get no device
+# response, so the CDC never wires and dya-studio cannot connect. Giving the
+# wired link a real peripheral peer (its uart0 on the same hub) lets the split
+# handshake complete, freeing the USB WQ so enumeration finishes.
+#
+# The split link is on uart0 here (NOT uart1 as in zmk-west-commands'
+# split_wired.resc / usb_wired_split.resc) because dya2's `zmk,wired-split`
+# device is &uart0. Half-duplex = one shared wire: both machines' uart0 connect
+# to the SAME hub, so each hears the other (a Renode UART hub forwards a
+# transmit to every OTHER connected UART, never back to the sender -- exactly a
+# point-to-point wire between the two halves).
+#
+# uart1 on each half is idle (a real image has no UART Studio transport and
+# CONFIG_CONSOLE=n on both halves); it is exposed on a server socket only so
+# renode_serve.py can own a terminal per machine (Renode serves each terminal to
+# only its first client) for symmetry with the single-machine path.
+
+using sysbus
+
+# $central_platform / $peripheral_platform are the vendored repls with model
+# `filename:`/`include` paths rewritten to absolute, materialized by
+# renode_serve.py (Renode resolves a PythonPeripheral filename against neither
+# the .repl dir nor its cwd).
+$central_bin?=@central.elf
+$peripheral_bin?=@peripheral.elf
+$central_platform?=@platforms/xiao_nrf52840_usb_pmw3610.repl
+$peripheral_platform?=@platforms/xiao_nrf52840_dya2_peripheral.repl
+$central_diag_port?=3480
+$peripheral_diag_port?=3481
+# Both halves are xiao_ble//zmk images linked at the Adafruit-UF2 bootloader
+# offset (CONFIG_FLASH_LOAD_OFFSET); the reset vector -- and every UART/GPIO IRQ
+# vector -- lives there, not at 0x0. LoadELF sets the entry PC, but `start`
+# resets the core via VTOR, so point VectorTableOffset at the offset after each
+# LoadELF or the split UARTE RX ISR never fires.
+$vtor?=0x27000
+
+emulation CreateUARTHub "split_link"
+
+# ---- central (real studio image + PMW3610 trackball; wired split on uart0) ---
+mach create "dya2_right"
+machine LoadPlatformDescription $central_platform
+connector Connect sysbus.uart0 split_link
+emulation CreateServerSocketTerminal $central_diag_port "central_diag_term" false
+connector Connect sysbus.uart1 central_diag_term
+sysbus LoadELF $central_bin
+sysbus.cpu VectorTableOffset $vtor
+
+# ---- peripheral (real wired-split half on Python-stub platform) --------------
+mach create "dya2_left"
+machine LoadPlatformDescription $peripheral_platform
+connector Connect sysbus.uart0 split_link
+emulation CreateServerSocketTerminal $peripheral_diag_port "peripheral_diag_term" false
+connector Connect sysbus.uart1 peripheral_diag_term
+sysbus LoadELF $peripheral_bin
+sysbus.cpu VectorTableOffset $vtor

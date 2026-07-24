@@ -1,0 +1,34 @@
+:name: dya2 right-trackball -- Studio over USB CDC + simulated PMW3610 trackball
+:description: Boot the real dya2 studio-rpc-usb-uart image (central-only) with a
+:description: simulated PMW3610 on SPIM0. console on uart0, uart1 idle (real image
+:description: speaks Studio over USB CDC). No `start`/NVS preload here -- renode_serve.py
+:description: issues them over the monitor after connecting the UART sockets.
+
+# Local (vendored) variant of zmk-west-commands' platforms/single_real.resc.
+# The only difference is $platform: renode_serve.py materializes the combined
+# USB+PMW3610 repl (xiao_nrf52840_usb_pmw3610.repl) with absolute model paths
+# and passes it here. Everything else -- VectorTableOffset at the UF2 load
+# offset, the two UART server sockets -- matches single_real.resc so the same
+# boot_single_real-style sequence (LoadBinary FF NVS, then start) applies.
+
+using sysbus
+
+$bin?=@zmk.elf
+$console_port?=3455
+$rpc_port?=3456
+$platform?=@platforms/xiao_nrf52840_usb_pmw3610.repl
+# xiao_ble//zmk links at the Adafruit-UF2 bootloader offset
+# (CONFIG_FLASH_LOAD_OFFSET); the reset vector is there, not at 0x0.
+$vtor?=0x27000
+
+mach create "dya2"
+machine LoadPlatformDescription $platform
+
+emulation CreateServerSocketTerminal $console_port "console_term" false
+connector Connect sysbus.uart0 console_term
+
+emulation CreateServerSocketTerminal $rpc_port "rpc_term" false
+connector Connect sysbus.uart1 rpc_term
+
+sysbus LoadELF $bin
+sysbus.cpu VectorTableOffset $vtor

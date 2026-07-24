@@ -4,10 +4,19 @@
 # studio-rpc-usb-uart image; Studio RPC rides the emulated USB CDC (NRF_USBD_Full
 # + DualCdcAcmBridge from zmk-west-commands), which drains large replies, so the
 # app reaches the fully-connected screen. See e2e/renode/README.md for the
-# architecture.
+# architecture and e2e/renode/firmware/README.md for the DUT build recipes.
 #
-# Opt-in / path-scoped so it never burdens ordinary PRs (the firmware build is
-# a full Zephyr build, ~15-20 min cold).
+# Structure: a `matrix` job emits the DUT firmware list (single source of truth);
+# `build-dut` fans out over it to build each real image from its own repo/branch;
+# `e2e` fans out over the same list to run that DUT's scoped Playwright specs
+# against it. Each DUT entry carries its build source AND the spec set it runs:
+#   tests/common  - the generic connect proof (every DUT)
+#   tests/official - the renode_tester Keymap-tab behaviors (official DUT only)
+#   tests/dya2    - the dya2 per-tab specs (dya2 DUT only; the fan-out target)
+# Adding a new DUT is a one-entry edit to that list.
+#
+# Opt-in / path-scoped so it never burdens ordinary PRs (each firmware build is a
+# full Zephyr build, ~15-20 min cold).
 name: renode-webserial-e2e
 
 on:
@@ -18,49 +27,189 @@ on:
       - ".github/workflows/renode-webserial-e2e.yml"
 
 env:
-  # cormoran/zmk-west-commands provides the Renode harness + the real-image DUT
-  # build config. Pin a ref for reproducibility.
+  # cormoran/zmk-west-commands provides the Renode harness (run side). The DUT
+  # build source is per-entry in the matrix (`repo`/`ref`/`manifest`/`build`).
   ZMK_WC_REPO: cormoran/zmk-west-commands
   ZMK_WC_REF: main
-  # Keyboard name the DUT advertises via GetDeviceInfo (zmk-west-commands'
-  # renode_tester shield). Swap both this and the DUT below for a real dya build.
-  DEVICE_NAME: Renode
 
 jobs:
-  build-dut:
-    name: Build studio-rpc-usb-uart DUT (real image)
+  # Single source of truth for the DUT firmware matrix, consumed by both
+  # build-dut and e2e via fromJSON. Each entry:
+  #   id       - stable slug (artifact name + matrix label)
+  #   repo/ref - the config repo + branch the DUT firmware is built from
+  #   manifest - west init -l manifest (relative to that repo)
+  #   keymap_overlay - ("" = none) a keymap file vendored in THIS repo (path
+  #              relative to the dya-studio repo root) that build-dut copies over
+  #              the DUT config repo's renode_tester shield keymap before build,
+  #              so the DUT ships that keymap. official-unlocked uses the
+  #              4-layer renode_tester_multilayer.keymap (Base/Lower/Raise/Adjust)
+  #              so the layer-management specs have >=2 layers to work with.
+  #   build    - the `west zmk-build ...` invocation (its cmake-args merged in)
+  #   elf      - path (relative to the west topdir) of the produced zmk.elf
+  #   peripheral_build - ("" = none) a second `west zmk-build ...` for a wired
+  #              split PERIPHERAL half; when set, renode_serve.py boots TWO
+  #              machines (central + this peripheral, uart0 split links
+  #              cross-connected) so the central's wired-split link has a peer
+  #              and enumerates USB. dya2 needs this (see firmware/README.md).
+  #   peripheral_elf - path of the peripheral zmk.elf (forwarded as
+  #              DYA2_PERIPHERAL_ELF); "" when peripheral_build is "".
+  #   device   - the name the DUT advertises via GetDeviceInfo (DEVICE_NAME)
+  #   platform - RENODE_PLATFORM for renode_serve.py ("" = harness USB platform,
+  #              "dya2" = vendored USB+PMW3610 trackball platform)
+  #   specs    - the Playwright spec dirs/files this DUT runs in ONE Renode boot
+  #              (passed to run-local.sh). Ordering is Playwright's path sort.
+  #   destructive_specs - ("" = none) specs that WIPE device state (NVS) and so
+  #              must run in their OWN fresh Renode boot, after the main `specs`
+  #              run. official-unlocked runs reset.spec.ts here: it persists a
+  #              keymap edit then factory-resets, which would corrupt the other
+  #              official specs if they shared its boot (and it must not follow
+  #              keymap.spec, which persists an A->F edit). The e2e job invokes
+  #              run-local.sh a SECOND time for these (a second boot).
+  #   one_connection_per_boot - true => this DUT serves only ONE Studio
+  #              connection per Renode boot (a second connect desyncs on buffered
+  #              bytes), so the e2e job runs EACH spec in its own fresh boot
+  #              instead of one boot for the whole `specs` set. dya2 (two-machine
+  #              wired split) needs this; official does not. See firmware/README
+  #              ("Per-boot execution") and tests/dya2/dya2.helpers.ts.
+  #   experimental - true => the e2e job is allowed to fail (continue-on-error).
+  #              The build still runs+gates; used for a DUT with a known e2e
+  #              blocker so it fans out without turning the whole workflow red.
+  # official-unlocked builds the exact studio-rpc-usb-uart image with
+  # CONFIG_ZMK_STUDIO_LOCKING=n so it boots UNLOCKED (the Keymap tab needs the
+  # keymap served, and official ZMK has no RPC unlock). dya2-unlocked builds the
+  # real dya2 right_trackball_studio_unlocked artifact (STUDIO_LOCKING=n, name
+  # "DYA2", PMW3610 trackball on SPI0), booted central-only.
+  matrix:
+    name: Compute DUT matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    outputs:
+      # duts: every DUT (build-dut fans out over this -- all firmware builds on
+      # every PR). e2e_duts: the DUTs whose e2e runs for THIS event -- all on
+      # manual dispatch, but only non-experimental ones on push/PR (the heavy
+      # dya2 emulation can't wire USB CDC on a stock 2-core runner within the
+      # timeout, so its e2e would only ever go red; it stays runnable via
+      # workflow_dispatch / a beefier runner, and its firmware still builds).
+      duts: ${{ steps.set.outputs.duts }}
+      e2e_duts: ${{ steps.set.outputs.e2e_duts }}
+    steps:
+      - id: set
+        run: |
+          cat >duts.json <<'JSON'
+          [
+            {
+              "id": "official-unlocked",
+              "repo": "cormoran/zmk-west-commands",
+              "ref": "main",
+              "manifest": "scripts/west-test-standalone.yml",
+              "keymap_overlay": "e2e/renode/firmware/renode_tester_multilayer.keymap",
+              "build": "west zmk-build tests/zmk-config --build-yaml tests/zmk-config/build-ble.yaml --cmake-args ' -DCONFIG_ZMK_STUDIO_LOCKING=n' -af ble -d build",
+              "elf": "build/ble/zephyr/zmk.elf",
+              "peripheral_build": "",
+              "peripheral_elf": "",
+              "device": "Renode",
+              "platform": "",
+              "specs": "tests/common tests/official/keymap-layers.spec.ts tests/official/keymap.spec.ts",
+              "destructive_specs": "tests/official/reset.spec.ts",
+              "one_connection_per_boot": false,
+              "experimental": false
+            },
+            {
+              "id": "dya2-unlocked",
+              "repo": "cormoran/zmk-keyboard-dya2",
+              "ref": "support-new-zmk-modules",
+              "manifest": "config/west-workspace.yml",
+              "keymap_overlay": "",
+              "build": "west zmk-build config -af right_trackball_studio_unlocked -d build",
+              "elf": "build/right_trackball_studio_unlocked/zephyr/zmk.elf",
+              "peripheral_build": "west zmk-build config -af left -d build",
+              "peripheral_elf": "build/left/zephyr/zmk.elf",
+              "device": "DYA2",
+              "platform": "dya2",
+              "specs": "tests/common tests/dya2",
+              "destructive_specs": "",
+              "one_connection_per_boot": true,
+              "experimental": true
+            }
+          ]
+          JSON
+          echo "duts=$(jq -c . duts.json)" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "e2e_duts=$(jq -c . duts.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "e2e_duts=$(jq -c '[.[] | select(.experimental == false)]' duts.json)" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-dut:
+    name: Build DUT (${{ matrix.dut.id }})
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        dut: ${{ fromJSON(needs.matrix.outputs.duts) }}
     container:
       image: zmkfirmware/zmk-build-arm:stable
     steps:
-      - name: Checkout zmk-west-commands
+      - name: Checkout DUT config repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.ZMK_WC_REPO }}
-          ref: ${{ env.ZMK_WC_REF }}
+          repository: ${{ matrix.dut.repo }}
+          ref: ${{ matrix.dut.ref }}
+      # The keymap overlay is vendored in THIS (dya-studio) repo, not the DUT
+      # config repo, so check it out into a side path to copy from.
+      - name: Checkout dya-studio (keymap overlay source)
+        if: matrix.dut.keymap_overlay != ''
+        uses: actions/checkout@v5
+        with:
+          path: _overlay-src
+      - name: Overlay multi-layer keymap onto renode_tester shield
+        if: matrix.dut.keymap_overlay != ''
+        run: |
+          cp "_overlay-src/${{ matrix.dut.keymap_overlay }}" \
+             tests/zmk-config/boards/shields/renode_tester/renode_tester.keymap
+          echo "renode_tester.keymap now:"
+          cat tests/zmk-config/boards/shields/renode_tester/renode_tester.keymap
       - name: West init/update
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          west init -l . --mf scripts/west-test-standalone.yml
+          west init -l . --mf ${{ matrix.dut.manifest }}
           west update --narrow
           west zephyr-export
       - name: Build DUT (real studio-rpc-usb-uart image)
-        # The EXACT hardware-flashable image (xiao_ble//zmk + renode_tester shield
-        # + studio-rpc-usb-uart snippet). Renode's usb mode boots this same image;
-        # no Renode-specific build config. Produces build/ble/zephyr/zmk.elf.
-        run: west zmk-build tests/zmk-config --build-yaml tests/zmk-config/build-ble.yaml -af ble -d build
+        run: ${{ matrix.dut.build }}
       - name: Upload DUT ELF
         uses: actions/upload-artifact@v4
         with:
-          name: dut-elf
-          path: build/ble/zephyr/zmk.elf
+          name: dut-elf-${{ matrix.dut.id }}
+          path: ${{ matrix.dut.elf }}
+      # Wired-split DUTs (dya2) also build a PERIPHERAL half; the e2e boots it as
+      # the second machine so the central's wired-split link has a peer.
+      - name: Build DUT peripheral (wired-split half)
+        if: matrix.dut.peripheral_build != ''
+        run: ${{ matrix.dut.peripheral_build }}
+      - name: Upload DUT peripheral ELF
+        if: matrix.dut.peripheral_build != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: dut-elf-${{ matrix.dut.id }}-peripheral
+          path: ${{ matrix.dut.peripheral_elf }}
 
   e2e:
-    name: dya-studio ⇄ WebSerial ⇄ Renode
-    needs: build-dut
+    name: e2e (${{ matrix.dut.id }})
+    needs: [matrix, build-dut]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # The e2e fans out over e2e_duts (the matrix job filters experimental DUTs
+    # out on push/PR, keeping them on workflow_dispatch) -- so dya2's heavy
+    # emulation, which can't wire USB CDC on a stock 2-core runner within the
+    # timeout, never turns a PR red. continue-on-error still guards a slow
+    # dispatch run.
+    continue-on-error: ${{ matrix.dut.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        dut: ${{ fromJSON(needs.matrix.outputs.e2e_duts) }}
     steps:
       - name: Checkout dya-studio
         uses: actions/checkout@v5
@@ -86,8 +235,14 @@ jobs:
       - name: Download DUT ELF
         uses: actions/download-artifact@v4
         with:
-          name: dut-elf
+          name: dut-elf-${{ matrix.dut.id }}
           path: fw
+      - name: Download DUT peripheral ELF (wired split)
+        if: matrix.dut.peripheral_build != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: dut-elf-${{ matrix.dut.id }}-peripheral
+          path: fw-peripheral
 
       - name: Install e2e deps (Playwright + ws)
         working-directory: e2e/renode
@@ -95,19 +250,76 @@ jobs:
           npm install
           npx playwright install --with-deps chromium
 
-      - name: Run WebSerial ⇄ Renode e2e
+      # Single-boot DUTs (official): run all of `specs` in ONE Renode boot.
+      # run-local.sh forwards its extra args to `playwright test`, so the DUT's
+      # `specs` dirs select exactly the specs valid for this DUT in one boot
+      # (tests/common for all; tests/official per DUT).
+      - name: Run WebSerial ⇄ Renode e2e (single Renode boot)
+        if: ${{ !matrix.dut.one_connection_per_boot }}
         working-directory: e2e/renode
         env:
           ZMK_WC_RENODE_LIB: ${{ github.workspace }}/zmk-west-commands/scripts/lib/renode
           DIST_DIR: ${{ github.workspace }}/dist
-          DEVICE_NAME: ${{ env.DEVICE_NAME }}
-        run: bash run-local.sh "${{ github.workspace }}/fw/zmk.elf"
+          DEVICE_NAME: ${{ matrix.dut.device }}
+          RENODE_PLATFORM: ${{ matrix.dut.platform }}
+          # When the DUT has a wired-split peripheral, forward it so renode_serve
+          # boots two machines (central + peripheral, uart0 links cross-connected).
+          DYA2_PERIPHERAL_ELF: ${{ matrix.dut.peripheral_build != '' && format('{0}/fw-peripheral/zmk.elf', github.workspace) || '' }}
+        run: bash run-local.sh "${{ github.workspace }}/fw/zmk.elf" ${{ matrix.dut.specs }}
+
+      # Per-boot DUTs (dya2): the two-machine wired-split DUT serves only ONE
+      # Studio connection per boot, so run EACH spec in its OWN fresh Renode boot
+      # (run-local.sh boots one Renode per invocation). Expand each `specs` token:
+      # a directory (tests/dya2) fans out to its individual *.spec.ts, a file runs
+      # as-is — so tests/common/connect.spec.ts and each tests/dya2/*.spec.ts each
+      # get a clean boot. NEVER pass multiple specs to one invocation here.
+      - name: Run WebSerial ⇄ Renode e2e (per-boot loop, one Studio connection per boot)
+        if: ${{ matrix.dut.one_connection_per_boot }}
+        working-directory: e2e/renode
+        env:
+          ZMK_WC_RENODE_LIB: ${{ github.workspace }}/zmk-west-commands/scripts/lib/renode
+          DIST_DIR: ${{ github.workspace }}/dist
+          DEVICE_NAME: ${{ matrix.dut.device }}
+          RENODE_PLATFORM: ${{ matrix.dut.platform }}
+          DYA2_PERIPHERAL_ELF: ${{ matrix.dut.peripheral_build != '' && format('{0}/fw-peripheral/zmk.elf', github.workspace) || '' }}
+        run: |
+          set -euo pipefail
+          ELF="${{ github.workspace }}/fw/zmk.elf"
+          rc=0
+          for entry in ${{ matrix.dut.specs }}; do
+            if [ -d "$entry" ]; then
+              specs=$(ls "$entry"/*.spec.ts)
+            else
+              specs="$entry"
+            fi
+            for spec in $specs; do
+              echo "::group::Renode boot for $spec"
+              bash run-local.sh "$ELF" "$spec" || rc=1
+              echo "::endgroup::"
+            done
+          done
+          exit "$rc"
+
+      # Destructive specs (factory reset) wipe NVS, so they run in their OWN
+      # fresh Renode boot AFTER the main specs — see the matrix `destructive_specs`
+      # note. run-local.sh boots one Renode per invocation, so this is a clean
+      # second boot with the same DUT ELF.
+      - name: Run destructive specs (fresh Renode boot)
+        if: matrix.dut.destructive_specs != ''
+        working-directory: e2e/renode
+        env:
+          ZMK_WC_RENODE_LIB: ${{ github.workspace }}/zmk-west-commands/scripts/lib/renode
+          DIST_DIR: ${{ github.workspace }}/dist
+          DEVICE_NAME: ${{ matrix.dut.device }}
+          RENODE_PLATFORM: ${{ matrix.dut.platform }}
+          DYA2_PERIPHERAL_ELF: ${{ matrix.dut.peripheral_build != '' && format('{0}/fw-peripheral/zmk.elf', github.workspace) || '' }}
+        run: bash run-local.sh "${{ github.workspace }}/fw/zmk.elf" ${{ matrix.dut.destructive_specs }}
 
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-artifacts
+          name: playwright-artifacts-${{ matrix.dut.id }}
           path: |
             e2e/renode/playwright-report
             e2e/renode/test-results
