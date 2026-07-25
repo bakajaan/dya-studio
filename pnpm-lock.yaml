@@ -38,6 +38,9 @@ importers:
       react:
         specifier: ^19.2.0
         version: 19.2.3
+      '@zmkfirmware/zmk-studio-ts-client':
+        specifier: github:cormoran/zmk-studio-ts-client#custom-studio-protocol+bluefy
+        version: https://codeload.github.com/cormoran/zmk-studio-ts-client/tar.gz/7c833385c0d7a76e09a5ab7b16a16e5c72c68dac
       react-dom:
         specifier: ^19.2.0
         version: 19.2.3(react@19.2.3)
