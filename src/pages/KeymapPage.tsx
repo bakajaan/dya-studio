@@ -413,8 +413,7 @@ export function KeymapPage() {
                   </Switch.Root>
                 </div>
               )}
-              {/* Keymap profiles: save/export/import/apply. Available even
-                  while locked (export only reads; applying prompts unlock). */}
+              {/* Keymap profiles: save/export/import/apply. */}
               <KeymapProfilePanel keymap={keymap} />
               {/* When Studio is locked, editing is disabled — show a lock badge
                   (click to unlock) instead of the Save / Reset controls. */}
@@ -753,4 +752,369 @@ export function KeymapPage() {
                           onClick={() => setShowRestoreMenu(false)}
                         />
                         <div
-                          role="
+                          role="menu"
+                          aria-label={t("Restore deleted layer")}
+                          className="absolute right-0 top-full mt-1 z-50 min-w-[12rem] max-h-64 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-xl py-1"
+                        >
+                          <button
+                            role="menuitem"
+                            className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium text-left text-[var(--color-electric)] hover:bg-[var(--color-border)]"
+                            onClick={handleRestoreAllLayers}
+                          >
+                            <IconRestore size={14} />
+                            {t("Restore all deleted layers ({{count}})", {
+                              count: keymap.removedLayerIds.length,
+                            })}
+                          </button>
+                          <div className="my-1 border-t border-[var(--color-border)]" />
+                          {keymap.removedLayerIds.map((layerId) => (
+                            <button
+                              key={`restore-${layerId}`}
+                              role="menuitem"
+                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-[var(--color-text-secondary)] hover:bg-[var(--color-border)] hover:text-[var(--color-text)]"
+                              onClick={() => handleRestoreLayer(layerId)}
+                            >
+                              <IconRestore
+                                size={14}
+                                className="text-[var(--color-text-muted)]"
+                              />
+                              {t("Layer {{id}}", { id: layerId })}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </Tooltip.Provider>
+            </div>
+
+            <div className="flex items-center gap-2 justify-between flex-wrap mb-4">
+              {/* Physical Layout Selector (if multiple layouts) */}
+              {keymap.physicalLayouts &&
+                keymap.physicalLayouts.layouts.length > 1 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-[var(--color-text-muted)]">
+                      {t("Physical Layout")}:
+                    </span>
+                    <select
+                      value={keymap.physicalLayouts.activeLayoutIndex}
+                      onChange={(e) =>
+                        keymap.setActiveLayout(Number(e.target.value))
+                      }
+                      className="px-2 py-1 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-sm text-[var(--color-text)]"
+                    >
+                      {keymap.physicalLayouts.layouts.map((layout, index) => (
+                        <option key={index} value={index}>
+                          {layout.name || t("Layout {{id}}", { id: index + 1 })}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+              {/* Keyboard Layout Selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-[var(--color-text-muted)]">
+                  {t("OS Layout")}:
+                </span>
+                <select
+                  value={keyboardLayoutContext.layout}
+                  onChange={(e) =>
+                    keyboardLayoutContext.setLayout(
+                      e.target
+                        .value as import("../lib/keyboardLayouts").KeyboardLayoutType,
+                    )
+                  }
+                  className="px-2 py-1 rounded bg-[var(--color-surface)] border border-[var(--color-border)] text-sm text-[var(--color-text)]"
+                >
+                  {getAvailableLayouts().map((layoutType) => (
+                    <option key={layoutType} value={layoutType}>
+                      {getLayoutLabel(layoutType)}
+                    </option>
+                  ))}
+                </select>
+                <Tooltip.Provider delayDuration={200}>
+                  {/* Tips: */}
+                  <Tooltip.Root>
+                    <Tooltip.Trigger asChild>
+                      <IconInfoCircle size={14} />
+                    </Tooltip.Trigger>
+                    <Tooltip.Portal>
+                      <Tooltip.Content
+                        className="px-3 py-2 rounded bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] shadow-lg z-50 max-w-xs"
+                        sideOffset={5}
+                      >
+                        <div className="mb-1 font-semibold text-[var(--color-electric)]">
+                          {t("Choose OS's keyboard layout setting")}
+                        </div>
+                        <ul className="list-disc pl-4 space-y-1">
+                          <li>
+                            {t(
+                              "This setting only affects the visual key labels in DYA Studio web UI.",
+                            )}
+                          </li>
+                          <li>
+                            {t(
+                              "Changing this does not update any firmware setting. The keyboard is detected as US regardless of this setting. Please change the layout setting in your OS if needed. For MacOS, USB connection is always detected as US and cannot be changed for now.",
+                            )}
+                          </li>
+                          <li>
+                            {t(
+                              "The selection is saved in your browser's local storage for now.",
+                            )}
+                          </li>
+                        </ul>
+                        <Tooltip.Arrow className="fill-[var(--color-surface-elevated)]" />
+                      </Tooltip.Content>
+                    </Tooltip.Portal>
+                  </Tooltip.Root>
+                </Tooltip.Provider>
+              </div>
+            </div>
+
+            {/* Keyboard Layout */}
+            {currentLayer && (
+              <div className="glass-card p-8 relative">
+                {/* Status indicator: unsaved edits (neon), saved-but-
+                    customized-from-default (electric/blue), or saved-and-stock
+                    (muted). */}
+                <div
+                  className="absolute top-3 right-3 z-10 flex items-center gap-1.5 px-2 py-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]/70 text-xs"
+                  title={
+                    !keymap.hasUnsavedChanges &&
+                    keymap.isKeymapChangedFromDefault
+                      ? t("Saved — changed from the default keymap")
+                      : undefined
+                  }
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      keymap.hasUnsavedChanges
+                        ? "bg-[var(--color-neon)]"
+                        : keymap.isKeymapChangedFromDefault
+                          ? "bg-[var(--color-electric)]"
+                          : "bg-[var(--color-text-muted)]"
+                    }`}
+                  />
+                  <span
+                    className={
+                      keymap.hasUnsavedChanges
+                        ? "text-[var(--color-neon)]"
+                        : keymap.isKeymapChangedFromDefault
+                          ? "text-[var(--color-electric)]"
+                          : "text-[var(--color-text-muted)]"
+                    }
+                  >
+                    {keymap.hasUnsavedChanges
+                      ? t("Unsaved changes")
+                      : t("Saved")}
+                  </span>
+                </div>
+                <KeyboardLayout
+                  layout={currentLayout}
+                  layer={currentLayer}
+                  layers={keymap.keymap.layers}
+                  behaviors={keymap.behaviors}
+                  selectedKey={selectedKeyPosition}
+                  onKeyClick={handleKeyClick}
+                  onKeyReset={handleKeyReset}
+                  onKeyResetToDefault={handleKeyResetToDefault}
+                  isBindingModified={keymap.isBindingModified}
+                  isBindingOriginalKnown={keymap.isBindingOriginalKnown}
+                  isBindingChangedFromDefault={
+                    keymap.isBindingChangedFromDefault
+                  }
+                  getOriginalBinding={keymap.getOriginalBinding}
+                  getDefaultBinding={keymap.getDefaultBinding}
+                  keyboardLayout={keyboardLayoutContext.layout}
+                  runtimeMacros={runtimeMacro.macros}
+                  modules={
+                    physicalLayoutModules.isAvailable
+                      ? physicalLayoutModules.modules
+                      : []
+                  }
+                  highlightedKeys={inputStream.highlightedKeys}
+                />
+              </div>
+            )}
+
+            {physicalLayoutModules.error && (
+              <div className="glass-card p-4 mt-4 border-yellow-500/20 bg-yellow-500/10 flex items-center gap-3">
+                <div className="p-2">
+                  <IconAlertTriangle size={24} />
+                </div>
+                <p className="text-sm">
+                  {t(
+                    "Physical layout module preview could not be loaded: {{error}}",
+                    { error: physicalLayoutModules.error },
+                  )}
+                </p>
+              </div>
+            )}
+
+            {/* Sensor Rotation Configuration */}
+            {!sensorRotate.isAvailable && (
+              <div className="glass-card p-4 mt-6 mb-4 border-yellow-500/20 bg-yellow-500/10 flex items-center gap-3">
+                <div className="p-2">
+                  <IconAlertTriangle size={24} />
+                </div>
+                <p className="text-sm">
+                  {t(
+                    "Runtime sensor rotation subsystem is not available for your keyboard. Rotary encoder configuration will not be displayed. You can enable the feature by applying cormoran/zmk-behavior-runtime-sensor-rotate in your firmware.",
+                  )}
+                  <br />
+                  <a
+                    href="https://github.com/cormoran/zmk-behavior-runtime-sensor-rotate"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[var(--color-electric)] underline mx-1"
+                  >
+                    cormoran/zmk-behavior-runtime-sensor-rotate
+                  </a>
+                </p>
+              </div>
+            )}
+
+            {sensorRotate.isAvailable && currentLayer && (
+              <div className="mt-6">
+                <SensorRotationConfig
+                  selectedLayerId={currentLayer.id}
+                  behaviors={keymap.behaviors}
+                  layers={layersForSelector}
+                  keyboardLayout={keyboardLayoutContext.layout}
+                />
+              </div>
+            )}
+          </>
+        )}
+        {/* Info */}
+        <div className="mt-8 p-4 rounded-lg bg-[var(--color-border)] border border-[var(--color-border-hover)]">
+          <p className="text-xs text-[var(--color-text-muted)]">
+            {connection.isConnected
+              ? t(
+                  "Click on a key to modify its binding. Modified keys are highlighted in green and show the original binding on hover. Use the Discard button to drop unsaved changes, or Reset to restore the default keymap.",
+                )
+              : t(
+                  "Connect your keyboard to edit keymaps. Click on a key to modify its binding.",
+                )}
+          </p>
+        </div>
+      </div>
+
+      {/* Rename Layer Dialog */}
+      <Dialog.Root
+        open={showRenameDialog}
+        onOpenChange={(open) => !open && setShowRenameDialog(false)}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
+          <Dialog.Content
+            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90vw] max-w-sm bg-[var(--color-surface)] rounded-xl border border-[var(--color-border)] shadow-2xl z-50 p-6"
+            onOpenAutoFocus={(e) => {
+              e.preventDefault();
+              renameInputRef.current?.focus();
+              renameInputRef.current?.select();
+            }}
+          >
+            <Dialog.Title className="text-base font-medium text-[var(--color-text)] mb-4">
+              {t("Rename Layer")}
+            </Dialog.Title>
+            <input
+              ref={renameInputRef}
+              type="text"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleRenameConfirm();
+                if (e.key === "Escape") setShowRenameDialog(false);
+              }}
+              maxLength={keymap.maxLayerNameLength || undefined}
+              className="w-full px-3 py-2 rounded-lg bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-sm text-[var(--color-text)] focus:outline-none focus:border-[var(--color-electric)] mb-4"
+              placeholder={t("Layer name")}
+            />
+            <div className="flex gap-3">
+              <button
+                className="flex-1 btn-ghost border border-[var(--color-border)]"
+                onClick={() => setShowRenameDialog(false)}
+                disabled={isRenaming}
+              >
+                {t("Cancel")}
+              </button>
+              <button
+                className="flex-1 btn-electric flex items-center justify-center gap-2"
+                onClick={() => void handleRenameConfirm()}
+                disabled={isRenaming}
+              >
+                {isRenaming && (
+                  <IconLoader2 size={16} className="animate-spin" />
+                )}
+                {t("Rename")}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Reset-to-Default Confirmation Dialog */}
+      <Dialog.Root
+        open={showResetDialog}
+        onOpenChange={(open) => {
+          if (!open && !isResetting) setShowResetDialog(false);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[90vw] max-w-md bg-[var(--color-surface)] rounded-xl border border-[var(--color-border)] shadow-2xl z-50 p-6">
+            <Dialog.Title className="text-base font-medium text-[var(--color-text)] mb-2 flex items-center gap-2">
+              <IconAlertTriangle
+                size={18}
+                className="text-[var(--color-warning)]"
+              />
+              {t("Reset to default keymap?")}
+            </Dialog.Title>
+            <Dialog.Description className="text-sm text-[var(--color-text-muted)] mb-5">
+              {t(
+                "This resets the saved keymap on your keyboard back to its hard-coded default and writes it to flash immediately. All saved key bindings will be lost. This cannot be undone.",
+              )}
+            </Dialog.Description>
+            <div className="flex gap-3">
+              <button
+                className="flex-1 btn-ghost border border-[var(--color-border)]"
+                onClick={() => setShowResetDialog(false)}
+                disabled={isResetting}
+              >
+                {t("Cancel")}
+              </button>
+              <button
+                className="flex-1 btn-electric flex items-center justify-center gap-2"
+                onClick={() => void handleResetToDefault()}
+                disabled={isResetting}
+              >
+                {isResetting && (
+                  <IconLoader2 size={16} className="animate-spin" />
+                )}
+                {t("Reset to default")}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Keycode Selector Dialog */}
+      <KeycodeSelector
+        open={showKeycodeSelector}
+        onClose={() => {
+          setShowKeycodeSelector(false);
+          setSelectedKeyPosition(null);
+        }}
+        onSelect={handleBindingSelect}
+        currentBinding={currentBinding}
+        behaviors={keymap.behaviors}
+        layers={layersForSelector}
+        keyboardLayout={keyboardLayoutContext.layout}
+        runtimeMacros={runtimeMacro.macros}
+      />
+    </div>
+  );
+}
