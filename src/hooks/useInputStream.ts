@@ -211,13 +211,32 @@ export function useInputStream(): UseInputStreamReturn {
     setActiveLayerIndex(null);
   }, [ready]);
 
+  // 【2026-07-27】ストリームモードの取り残し防止。
+  // ストリーム有効中はキーイベントがStudioへ送られるため、有効のまま
+  // ページを離れるとキーボード側が計測モードのまま取り残され、打鍵が
+  // ホストに届かない（=キー入力を受け付けない）ことがある。
+  // タブ切替ではページをアンマウントしないようにした（TabNavigation）が、
+  // ブラウザを閉じる/タブを隠すケースでも停止を試みる。
   useEffect(() => {
-    return () => {
-      if (!isEnabledRef.current || !readyRef.current) {
-        return;
-      }
+    const disableIfEnabled = () => {
+      if (!isEnabledRef.current || !readyRef.current) return;
+      void callRef.current(Request.create({ disableStream: {} })).catch(
+        () => undefined,
+      );
+    };
 
-      void callRef.current(Request.create({ disableStream: {} }));
+    const onPageHide = () => disableIfEnabled();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") disableIfEnabled();
+    };
+
+    window.addEventListener("pagehide", onPageHide);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      disableIfEnabled();
     };
   }, []);
 
