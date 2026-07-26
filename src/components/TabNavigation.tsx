@@ -1,5 +1,5 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { PageTransition } from "./PageTransition";
 
 export interface TabItem {
@@ -35,29 +35,45 @@ interface TabNavigationProps {
  * 接続直後に全タブ分のRPCが一斉に走るのを避けつつ、タブ往復での
  * 再マウントをなくす。PageTransition の key はタブID固定にして、
  * 非アクティブ化で motion.div が差し替わって子が崩れないようにする。
+ *
+ * 【訪問済みの記録方法について】
+ * 当初この記録を useEffect + setVisitedTabs で行っていたが、それは
+ * react-hooks/set-state-in-effect (エフェクト内の同期 setState は連鎖レンダー
+ * を招く) に該当し、CIのlintが失敗していた。エフェクトは不要なので、
+ * 記録はタブ切り替えハンドラ内で行う。
+ *
+ * ハンドラを経由しない経路（URLハッシュの直接変更やブラウザの戻る/進む）で
+ * activeTab が変わった場合に備え、マウント判定には activeTab を OR で
+ * 含めている。アクティブなタブは記録の有無に関わらず必ずマウントされるので、
+ * 記録漏れで空表示になることはない。
  */
 export function TabNavigation({
   tabs,
   activeTab,
   onTabChange,
 }: TabNavigationProps) {
+  // 初期タブは最初から訪問済み扱い（ディープリンクでの直接開きも含む）。
   const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<string>>(
     () => new Set([activeTab]),
   );
 
-  useEffect(() => {
-    setVisitedTabs((previous) => {
-      if (previous.has(activeTab)) return previous;
-      const next = new Set(previous);
-      next.add(activeTab);
-      return next;
-    });
-  }, [activeTab]);
+  const handleTabChange = useCallback(
+    (tabId: string) => {
+      setVisitedTabs((previous) => {
+        if (previous.has(tabId)) return previous;
+        const next = new Set(previous);
+        next.add(tabId);
+        return next;
+      });
+      onTabChange(tabId);
+    },
+    [onTabChange],
+  );
 
   return (
     <Tabs.Root
       value={activeTab}
-      onValueChange={onTabChange}
+      onValueChange={handleTabChange}
       className="flex flex-col h-full"
     >
       {/* Tab List */}
@@ -84,7 +100,9 @@ export function TabNavigation({
             forceMount
           >
             <PageTransition transitionKey={tab.id}>
-              {visitedTabs.has(tab.id) ? tab.content : null}
+              {visitedTabs.has(tab.id) || tab.id === activeTab
+                ? tab.content
+                : null}
             </PageTransition>
           </Tabs.Content>
         ))}
