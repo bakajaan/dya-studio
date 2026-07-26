@@ -1,0 +1,59 @@
+# package-lock.json を GitHub 上で再生成するための手動ワークフロー。
+#
+# なぜ必要か:
+#   package.json を編集（7/25 の SHA 固定対応など）した際に
+#   package-lock.json が同時に更新できておらず、CI が npm ci を使えず
+#   npm install で逃げている。そのため CI と Cloudflare で入る依存の
+#   バージョンが一致しない（CI の結果に再現性がない）。
+#
+# 使い方:
+#   GitHub の Actions タブ → 左の一覧から "Update package-lock.json" を選び、
+#   "Run workflow" を押す。差分があれば main に直接コミットされる。
+#   実行後は test.yml の npm install を npm ci に戻せる。
+#
+# 注意:
+#   リポジトリ設定 Settings → Actions → General → Workflow permissions で
+#   "Read and write permissions" が必要（下の permissions: contents: write は
+#   その上限内でしか効かない）。
+name: Update package-lock.json
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update-lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # package.json を真に受けて解決し直し、package-lock.json を更新させる。
+      # 依存に git 参照 (github:cormoran/...) が含まれるので、--package-lock-only
+      # でなく実際にインストールして確実に解決する。
+      - name: Reinstall dependencies to refresh the lockfile
+        run: npm install --no-audit --no-fund
+
+      # ロックが壊れていないことをその場で検証する。ここで失敗するなら
+      # コミットしても CI の npm ci が落ちるので、先に止める。
+      - name: Verify the refreshed lockfile works with npm ci
+        run: |
+          rm -rf node_modules
+          npm ci
+
+      - name: Commit the lockfile if it changed
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json は既に最新です。コミットするものはありません。"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "chore: refresh package-lock.json (via Actions)"
+          git push
