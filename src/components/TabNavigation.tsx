@@ -1,5 +1,5 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { PageTransition } from "./PageTransition";
 
 export interface TabItem {
@@ -15,11 +15,45 @@ interface TabNavigationProps {
   onTabChange: (tabId: string) => void;
 }
 
+/**
+ * 【2026-07-27 修正】タブを離れてもページをアンマウントしない。
+ *
+ * 以前は `activeTab === tab.id ? tab.content : null` としていたため、タブを
+ * 移動するたびにそのページの全フックが破棄→再生成されていた。これが
+ * 「タブを移動するとキー入力を受け付けなくなり、しばらくすると切断する」
+ * の直接原因で、具体的には次の2つが同時に起きていた:
+ *
+ * 1. useInputStream のクリーンアップはアンマウント時に disableStream を
+ *    fire-and-forget で投げるだけだった。従って計測中にInsightsタブを
+ *    離れると、送信完了を待たずにコンポーネントが消えるため、キーボードが
+ *    ストリームモードのまま取り残され→打鍵がホストに届かない。
+ * 2. 戻ってきたタブではキーマップ/設定/バッテリー履歴/診断などの
+ *    自動取得RPCが一斉に再発行され、BLEの遅い回線でキューが詰まって
+ *    タイムアウト→GATT切断に至る。
+ *
+ * 訪問済みのタブだけをマウントし続ける（=初回訪問時にのみマウント）ことで、
+ * 接続直後に全タブ分のRPCが一斉に走るのを避けつつ、タブ往復での
+ * 再マウントをなくす。PageTransition の key はタブID固定にして、
+ * 非アクティブ化で motion.div が差し替わって子が崩れないようにする。
+ */
 export function TabNavigation({
   tabs,
   activeTab,
   onTabChange,
 }: TabNavigationProps) {
+  const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<string>>(
+    () => new Set([activeTab]),
+  );
+
+  useEffect(() => {
+    setVisitedTabs((previous) => {
+      if (previous.has(activeTab)) return previous;
+      const next = new Set(previous);
+      next.add(activeTab);
+      return next;
+    });
+  }, [activeTab]);
+
   return (
     <Tabs.Root
       value={activeTab}
@@ -49,8 +83,8 @@ export function TabNavigation({
             className="h-full outline-none data-[state=inactive]:hidden"
             forceMount
           >
-            <PageTransition transitionKey={activeTab === tab.id ? tab.id : ""}>
-              {activeTab === tab.id ? tab.content : null}
+            <PageTransition transitionKey={tab.id}>
+              {visitedTabs.has(tab.id) ? tab.content : null}
             </PageTransition>
           </Tabs.Content>
         ))}
