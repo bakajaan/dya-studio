@@ -15,6 +15,11 @@
  * layer, rename, save, …) always goes through the official protocol: the fast
  * subsystem is read-only, and the official keymap subsystem is what owns the
  * edit/save state. See {@link useKeymap}.
+ *
+ * Loads are also DEDUPED across consumers (see `../lib/keymapLoadCoordinator`).
+ * `useKeymap()` is a hook, not a context, so the keymap tab and the Insights tab
+ * each own a loader; with tabs staying mounted they would otherwise pull the
+ * whole keymap over BLE twice at the same time, which broke the GATT session.
  */
 import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { ZMKAppContext } from "@cormoran/zmk-studio-react-hook";
@@ -50,6 +55,12 @@ import {
   assertOfficialKeymapRpcAllowed,
   setFastKeymapAvailable,
 } from "../lib/officialKeymapRpcGuard";
+import {
+  addKeymapLoadListeners,
+  hasKeymapLoadListeners,
+  shareBackgroundLoad,
+  shareKeymapLoad,
+} from "../lib/keymapLoadCoordinator";
 import type { TranslationParams } from "../i18n/translations";
 
 /** Identifier the fast-keymap module registers on the device. */
@@ -174,7 +185,13 @@ export interface UseKeymapSourceReturn {
    * {@link KeymapData.behaviorsDeferred} — filled via `onBehaviorsLoaded`).
    * While behaviors are deferred, bindings render with a placeholder label. On
    * the official path everything is loaded before returning and neither
-   * background callback fires. */
+   * background callback fires.
+   *
+   * Deduped across consumers: if an equivalent load is already running (the
+   * keymap tab and the Insights tab are both mounted, say), this waits for that
+   * one and returns a private copy of its result instead of issuing a second
+   * set of round-trips. `onProgress` then only reports for the load that
+   * actually runs; the deferred callbacks still fire for every consumer. */
   loadKeymapData: (
     onProgress?: KeymapLoadProgressCallback,
     onLayersLoaded?: OnLayersLoadedCallback,
@@ -371,94 +388,104 @@ export function useKeymapSource(): UseKeymapSourceReturn {
       onLayersLoaded?: OnLayersLoadedCallback,
       onBehaviorsLoaded?: OnBehaviorsLoadedCallback,
     ): Promise<KeymapData> => {
-      if (isFastAvailable) {
-        onProgress?.({ phase: "keymap" });
-        // Phase 1: fetch only the layout + FIRST layer so the keymap preview can
-        // paint as fast as possible. Behaviors are deferred (unless a warm cache
-        // serves them for free) and other uncached layers come back as empty
-        // placeholders (model.pendingLayerIds / model.behaviorsDeferred).
-        const model = await loadFastKeymap(call, {
-          deviceKey,
-          firstLayerOnly: true,
-          deferBehaviors: true,
-        });
-        // Remember each layout's fingerprint so a later lazy geometry load can
-        // hit the fp-keyed cache (mapFastModel drops the fps).
-        layoutFpsRef.current = model.layouts.map((l) => l.fp);
-        const data = mapFastModel(model);
+      // Register for the deferred results BEFORE (possibly) joining another
+      // consumer's in-flight load, so the shared background phase fans out to
+      // this consumer too.
+      addKeymapLoadListeners(onLayersLoaded, onBehaviorsLoaded);
 
-        // Phase 2 (background): resolve whatever phase 1 deferred — the behavior
-        // labels and/or the remaining layers. layouts and the first layer are
-        // cache-warm now, so this pays only for the behaviors round-trip(s) and
-        // one batched get_layers. Behaviors are handed back first (onBehaviorsLoaded,
-        // mid-load) so labels appear before the remaining layers arrive.
-        const needsBackground =
-          data.pendingLayerIds.length > 0 || data.behaviorsDeferred;
-        if (needsBackground && (onLayersLoaded || onBehaviorsLoaded)) {
-          void loadFastKeymap(call, {
+      // Dedupe key: protocol + device. Two mounted pages loading the same
+      // keyboard share one set of round-trips (see keymapLoadCoordinator).
+      const loadKey = `${source}:${deviceKey ?? "unknown"}`;
+
+      return shareKeymapLoad(loadKey, async () => {
+        if (isFastAvailable) {
+          onProgress?.({ phase: "keymap" });
+          // Phase 1: fetch only the layout + FIRST layer so the keymap preview can
+          // paint as fast as possible. Behaviors are deferred (unless a warm cache
+          // serves them for free) and other uncached layers come back as empty
+          // placeholders (model.pendingLayerIds / model.behaviorsDeferred).
+          const model = await loadFastKeymap(call, {
             deviceKey,
-            onBehaviorsLoaded: onBehaviorsLoaded
-              ? (behaviors) => onBehaviorsLoaded(mapFastBehaviors(behaviors))
-              : undefined,
-          })
-            .then((full) => onLayersLoaded?.(mapFastModel(full).keymap.layers))
-            .catch((err) => {
-              console.error("Background keymap load failed:", err);
-            });
-        }
-
-        return data;
-      }
-
-      // -- official path ----------------------------------------------------
-      onProgress?.({ phase: "layouts" });
-      const physicalLayouts = (await officialRpc(
-        { keymap: { getPhysicalLayouts: true } },
-        (r) => r.keymap?.getPhysicalLayouts,
-      )) ?? { activeLayoutIndex: 0, layouts: [] };
-
-      onProgress?.({ phase: "keymap" });
-      const keymap = (await officialRpc(
-        { keymap: { getKeymap: true } },
-        (r) => r.keymap?.getKeymap,
-      )) ?? { layers: [], availableLayers: 0, maxLayerNameLength: 0 };
-
-      onProgress?.({ phase: "behaviors", current: 0, total: 0 });
-      const behaviors = new Map<number, BehaviorDefinition>();
-      const behaviorIds =
-        (await officialRpc(
-          { behaviors: { listAllBehaviors: true } },
-          (r) => r.behaviors?.listAllBehaviors?.behaviors,
-        )) ?? [];
-      const total = behaviorIds.length;
-      onProgress?.({ phase: "behaviors", current: 0, total });
-      let current = 0;
-      for (const behaviorId of behaviorIds) {
-        const details = await officialRpc(
-          { behaviors: { getBehaviorDetails: { behaviorId } } },
-          (r) => r.behaviors?.getBehaviorDetails,
-        );
-        if (details) {
-          behaviors.set(behaviorId, {
-            id: details.id,
-            displayName: details.displayName,
-            metadata: details.metadata,
+            firstLayerOnly: true,
+            deferBehaviors: true,
           });
-        }
-        current += 1;
-        onProgress?.({ phase: "behaviors", current, total });
-      }
+          // Remember each layout's fingerprint so a later lazy geometry load can
+          // hit the fp-keyed cache (mapFastModel drops the fps).
+          layoutFpsRef.current = model.layouts.map((l) => l.fp);
+          const data = mapFastModel(model);
 
-      return {
-        physicalLayouts,
-        keymap,
-        behaviors,
-        source: "official",
-        pendingLayerIds: [],
-        behaviorsDeferred: false,
-      };
+          // Phase 2 (background): resolve whatever phase 1 deferred — the behavior
+          // labels and/or the remaining layers. layouts and the first layer are
+          // cache-warm now, so this pays only for the behaviors round-trip(s) and
+          // one batched get_layers. Behaviors are handed back first (emitBehaviors,
+          // mid-load) so labels appear before the remaining layers arrive.
+          // Runs ONCE for all consumers of this load, not once per consumer.
+          const needsBackground =
+            data.pendingLayerIds.length > 0 || data.behaviorsDeferred;
+          if (needsBackground && hasKeymapLoadListeners()) {
+            shareBackgroundLoad(async (emitBehaviors, emitLayers) => {
+              const full = await loadFastKeymap(call, {
+                deviceKey,
+                onBehaviorsLoaded: (behaviors) =>
+                  emitBehaviors(mapFastBehaviors(behaviors)),
+              });
+              emitLayers(mapFastModel(full).keymap.layers);
+            });
+          }
+
+          return data;
+        }
+
+        // -- official path --------------------------------------------------
+        onProgress?.({ phase: "layouts" });
+        const physicalLayouts = (await officialRpc(
+          { keymap: { getPhysicalLayouts: true } },
+          (r) => r.keymap?.getPhysicalLayouts,
+        )) ?? { activeLayoutIndex: 0, layouts: [] };
+
+        onProgress?.({ phase: "keymap" });
+        const keymap = (await officialRpc(
+          { keymap: { getKeymap: true } },
+          (r) => r.keymap?.getKeymap,
+        )) ?? { layers: [], availableLayers: 0, maxLayerNameLength: 0 };
+
+        onProgress?.({ phase: "behaviors", current: 0, total: 0 });
+        const behaviors = new Map<number, BehaviorDefinition>();
+        const behaviorIds =
+          (await officialRpc(
+            { behaviors: { listAllBehaviors: true } },
+            (r) => r.behaviors?.listAllBehaviors?.behaviors,
+          )) ?? [];
+        const total = behaviorIds.length;
+        onProgress?.({ phase: "behaviors", current: 0, total });
+        let current = 0;
+        for (const behaviorId of behaviorIds) {
+          const details = await officialRpc(
+            { behaviors: { getBehaviorDetails: { behaviorId } } },
+            (r) => r.behaviors?.getBehaviorDetails,
+          );
+          if (details) {
+            behaviors.set(behaviorId, {
+              id: details.id,
+              displayName: details.displayName,
+              metadata: details.metadata,
+            });
+          }
+          current += 1;
+          onProgress?.({ phase: "behaviors", current, total });
+        }
+
+        return {
+          physicalLayouts,
+          keymap,
+          behaviors,
+          source: "official" as const,
+          pendingLayerIds: [],
+          behaviorsDeferred: false,
+        };
+      });
     },
-    [isFastAvailable, call, deviceKey, officialRpc],
+    [isFastAvailable, call, deviceKey, officialRpc, source],
   );
 
   const loadPhysicalLayouts =
