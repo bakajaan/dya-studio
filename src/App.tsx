@@ -1,6 +1,7 @@
 import { useContext, useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
+  IconChartBar,
   IconHome,
   IconKeyboard,
   IconPlugConnected,
@@ -30,6 +31,7 @@ import { ConnectionPage } from "./pages/ConnectionPage";
 import { KeymapPage } from "./pages/KeymapPage";
 import { TrackballPage } from "./pages/TrackballPage";
 import { MacroComboPage } from "./pages/MacroComboPage";
+import { InsightsPage } from "./pages/InsightsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { CustomSubsystemsPage } from "./pages/CustomSubsystemsPage";
 import { TroubleshootingPage } from "./pages/TroubleshootingPage";
@@ -64,6 +66,12 @@ function getTabs(t: (key: string) => string): TabItem[] {
       label: t("Trackball"),
       icon: <IconPointer size={18} />,
       content: <TrackballPage />,
+    },
+    {
+      id: "insights",
+      label: t("Insights"),
+      icon: <IconChartBar size={18} />,
+      content: <InsightsPage />,
     },
     {
       id: "connection",
