@@ -9,14 +9,18 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
         with:
           node-version: 24
       - name: Install dependencies
-        run: npm ci
+        # NOTE: package-lock.json が現行 package.json (7/25のSHA固定対応で書き直し)
+        # と不整合のため npm ci ではなく npm install を使用する暫定処置。
+        # ローカルで npm install を実行して package-lock.json を更新コミットしたら
+        # npm ci に戻すこと。
+        run: npm install --no-audit --no-fund
       - name: Run lint
         run: npm run lint
       - name: Run tests
