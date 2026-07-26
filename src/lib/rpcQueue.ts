@@ -40,6 +40,11 @@
  * {@link enqueueRpc} — the inner call would wait for a slot the outer call is
  * still holding. Compose sequential RPCs at the call site instead (each `await`
  * takes and releases its own slot), which is what all loaders already do.
+ *
+ * NOTE FOR TESTS: the queue is module-level state, so it is shared by every test
+ * in a file. A test that enqueues a call which never settles would otherwise
+ * wedge the queue for all following tests. {@link resetRpcQueue} exists for
+ * that, and `src/setupTests.ts` calls it before each test.
  */
 
 /**
@@ -64,6 +69,18 @@ function ignore(): void {
 /** How many RPCs are queued or in flight right now. Diagnostics only. */
 export function rpcQueueDepth(): number {
   return pending;
+}
+
+/**
+ * Drop the queue back to its initial state: the next call runs immediately
+ * instead of waiting behind whatever was enqueued before.
+ *
+ * Intended for tests. Already-enqueued calls are not cancelled (we cannot
+ * cancel an in-flight read); they simply stop gating new ones.
+ */
+export function resetRpcQueue(): void {
+  tail = Promise.resolve();
+  pending = 0;
 }
 
 /**

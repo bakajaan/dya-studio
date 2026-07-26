@@ -9,6 +9,7 @@ import {
   WritableStream,
   TransformStream,
 } from "stream/web";
+import { resetRpcQueue } from "./lib/rpcQueue";
 
 // Polyfill TextEncoder and TextDecoder for protobuf support
 global.TextEncoder = TextEncoder;
@@ -44,4 +45,13 @@ Object.defineProperty(window, "matchMedia", {
     removeEventListener: jest.fn(),
     dispatchEvent: jest.fn(),
   })),
+});
+
+// Every outbound RPC goes through a single global FIFO queue (src/lib/rpcQueue),
+// which is module-level state shared by all tests in a file. A test that
+// enqueues a call which never settles (e.g. simulating a locked keyboard that
+// parks its requests) would keep holding the queue and stall every later test.
+// Start each test with an empty queue so tests stay independent.
+beforeEach(() => {
+  resetRpcQueue();
 });

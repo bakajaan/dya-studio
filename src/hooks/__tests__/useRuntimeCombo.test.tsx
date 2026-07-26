@@ -153,8 +153,11 @@ describe("useRuntimeCombo", () => {
 
     const { result } = renderHook(() => useRuntimeCombo(), { wrapper });
 
-    // Mount auto-load fires listCombos + getGlobalSettings (2 calls), then parks.
-    await waitFor(() => expect(mockCallRPC).toHaveBeenCalledTimes(2));
+    // Mount auto-load asks for listCombos and getGlobalSettings, but every RPC
+    // now goes through the global FIFO queue (src/lib/rpcQueue), so only the
+    // first one is handed to the device; the second waits for it to settle,
+    // which never happens while the load is parked. Hence exactly one call.
+    await waitFor(() => expect(mockCallRPC).toHaveBeenCalledTimes(1));
 
     // Re-triggering reload while the first is still parked adds no new requests.
     await act(async () => {
@@ -163,7 +166,7 @@ describe("useRuntimeCombo", () => {
     await act(async () => {
       await result.current.reload();
     });
-    expect(mockCallRPC).toHaveBeenCalledTimes(2);
+    expect(mockCallRPC).toHaveBeenCalledTimes(1);
   });
 
   it("does not re-load on re-render when a load fails fast (locked, gate rejects)", async () => {
@@ -188,7 +191,8 @@ describe("useRuntimeCombo", () => {
       wrapper,
     });
 
-    // Mount auto-load fires listCombos + getGlobalSettings (2 calls), fails fast.
+    // Mount auto-load fires listCombos + getGlobalSettings (2 calls): each one
+    // fails fast, so it releases its queue slot and the next call goes out.
     await waitFor(() => expect(mockCallRPC).toHaveBeenCalledTimes(2));
     await waitFor(() =>
       expect(result.current.error).toBe(STUDIO_LOCKED_MESSAGE),
