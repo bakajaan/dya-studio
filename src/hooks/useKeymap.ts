@@ -16,7 +16,9 @@ import { ZMKAppContext } from "@cormoran/zmk-studio-react-hook";
 import type { call_rpc } from "@zmkfirmware/zmk-studio-ts-client";
 import { loggedCallRpc } from "../lib/rpcLogging";
 import { useStudioUnlock } from "./useStudioUnlock";
+import { useLanguage } from "./useLanguage";
 import { studioLockErrorText } from "../lib/studioUnlock";
+import { describeRpcError } from "../lib/transportErrors";
 import type {
   Keymap,
   Layer,
@@ -215,6 +217,10 @@ function bindingsEqual(a: BehaviorBinding, b: BehaviorBinding): boolean {
 export function useKeymap(): UseKeymapReturn {
   const zmkApp = useContext(ZMKAppContext);
   const { runWithUnlock } = useStudioUnlock();
+  // Only used to phrase transport errors (see describeRpcError): a dropped BLE
+  // link otherwise surfaces the browser's raw English GATT exception, which
+  // says nothing about what the user should do next.
+  const { language } = useLanguage();
 
   // State
   const [physicalLayouts, setPhysicalLayouts] =
@@ -359,13 +365,20 @@ export function useKeymap(): UseKeymapReturn {
           return null;
         }
         console.error("RPC call failed:", err);
-        setErrorWithAutoClear(
-          err instanceof Error ? err.message : "Unknown error",
-        );
+        // Transport failures (dropped BLE link, transient GATT error, ...) are
+        // rephrased into an actionable message; anything else keeps its own
+        // message for debugging.
+        setErrorWithAutoClear(describeRpcError(err, language));
         return null;
       }
     },
-    [connection, clearError, setErrorWithAutoClear, runWithUnlock],
+    [
+      connection,
+      clearError,
+      setErrorWithAutoClear,
+      runWithUnlock,
+      language,
+    ],
   );
 
   // Store original bindings from keymap
@@ -515,8 +528,11 @@ export function useKeymap(): UseKeymapReturn {
           setErrorWithAutoClear(locked);
         } else {
           console.error("Failed to load keymap data:", err);
+          // A BLE drop mid-load is the common case here (the keyboard resets or
+          // goes out of range while layers stream in): explain that instead of
+          // the browser's raw GATT exception text.
           setErrorWithAutoClear(
-            err instanceof Error ? err.message : "Failed to load keymap data",
+            describeRpcError(err, language, "Failed to load keymap data"),
           );
         }
       }
@@ -579,6 +595,7 @@ export function useKeymap(): UseKeymapReturn {
     storeOriginalBindings,
     setErrorWithAutoClear,
     runWithUnlock,
+    language,
   ]);
 
   // Set a key binding
