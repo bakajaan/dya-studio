@@ -163,6 +163,167 @@ function fieldName(key: string): string {
   return at === -1 ? key : key.slice(0, at);
 }
 
+// ---------------------------------------------------------------------------
+// Generic setting descriptions
+//
+// Settings outside the PMW3610 groups previously showed only their raw key,
+// which made it hard to tell what each item does. A description is resolved
+// for every row and shown under the setting name, in this order:
+//   1. Known field names shared across firmware modules
+//      (KNOWN_FIELD_DESCRIPTIONS)
+//   2. Keyspace prefixes such as "macro/" (KEYSPACE_PREFIX_DESCRIPTIONS)
+//   3. A fallback derived from the setting's value type and constraints
+//      (describeSettingByShape), so even unknown module settings at least
+//      explain what kind of value they take.
+// Texts are kept bilingual here (instead of the i18n dictionary) so adding a
+// new entry stays a single-object change.
+// ---------------------------------------------------------------------------
+
+interface BilingualText {
+  en: string;
+  ja: string;
+}
+
+function pickText(text: BilingualText, language: string): string {
+  return language === "ja" ? text.ja : text.en;
+}
+
+const SECTION_DESCRIPTIONS: Record<string, BilingualText> = {
+  cormoran_custom_settings: {
+    en: "General storage shared by firmware modules for their settings and runtime data (runtime macros, combos, OS profiles, ...).",
+    ja: "各ファームウェアモジュールが設定やランタイムデータ（ランタイムマクロ・コンボ・OSプロファイルなど）を保存する共用領域です。",
+  },
+  [PMW3610_CUSTOM_SETTINGS_IDENTIFIER]: {
+    en: "Settings for the PMW3610 trackball sensor driver.",
+    ja: "PMW3610トラックボールセンサードライバの設定です。",
+  },
+};
+
+const KNOWN_FIELD_DESCRIPTIONS: Record<string, BilingualText> = {
+  default_layer: {
+    en: "Index of the base (default) layer used when no other layer is active. The default-layer module can switch this per connection / OS.",
+    ja: "他のレイヤーが有効でないときに使う基本（デフォルト）レイヤーの番号です。default-layerモジュールが接続先やOSごとに切り替えられます。",
+  },
+  tap_behavior: {
+    en: "ID of the behavior executed on tap.",
+    ja: "タップ時に実行するビヘイビア（動作）のIDです。",
+  },
+  tap_behavior_binding: {
+    en: "Behavior binding (behavior + param1/param2) assigned to tap.",
+    ja: "タップに割り当てるビヘイビアとパラメータ（param1/param2）の組です。",
+  },
+  feature_enabled: {
+    en: "Toggles this module's feature on or off.",
+    ja: "このモジュールの機能のオン/オフを切り替えます。",
+  },
+  profile_name: {
+    en: "Selects which profile (operating mode) to use.",
+    ja: "使用するプロファイル（動作モード）を選びます。",
+  },
+  macro_bytes: {
+    en: "Raw macro payload bytes (normally edited from the Macro & Combo tab rather than here).",
+    ja: "マクロ本体のバイナリデータです（通常はここではなくMacro & Comboタブから編集します）。",
+  },
+  os: {
+    en: "Operating system associated with this connection profile.",
+    ja: "この接続プロファイルに関連付けられたOSです。",
+  },
+  os_override: {
+    en: "Manually overrides the detected operating system for this connection.",
+    ja: "この接続先で検出されたOSを手動で上書きします。",
+  },
+  detected_os: {
+    en: "Operating system detected for this connection.",
+    ja: "この接続先で検出されたOSです。",
+  },
+};
+
+const KEYSPACE_PREFIX_DESCRIPTIONS: Array<{
+  prefix: string;
+  text: BilingualText;
+}> = [
+  {
+    prefix: "macro/",
+    text: {
+      en: "Stored data for a runtime macro slot (edit it from the Macro & Combo tab).",
+      ja: "ランタイムマクロのスロットに保存されたデータです（編集はMacro & Comboタブから行えます）。",
+    },
+  },
+  {
+    prefix: "combo/",
+    text: {
+      en: "Stored data for a runtime combo slot (edit it from the Macro & Combo tab).",
+      ja: "ランタイムコンボのスロットに保存されたデータです（編集はMacro & Comboタブから行えます）。",
+    },
+  },
+];
+
+// Fallback used when a setting has no known field/keyspace description:
+// derive a short explanation from its constraints and value type so the user
+// can at least tell what kind of value the item takes.
+function describeSettingByShape(setting: Setting, language: string): string {
+  const ja = language === "ja";
+  if (hasLayerConstraint(setting)) {
+    return ja
+      ? "キーマップのレイヤーを選択する設定です。"
+      : "Selects a keymap layer.";
+  }
+  if (hasBehaviorConstraint(setting)) {
+    return ja
+      ? "キーの動作（ビヘイビア）を選択する設定です。"
+      : "Selects a key behavior.";
+  }
+  if (optionsConstraint(setting)) {
+    return ja
+      ? "あらかじめ用意された選択肢から選ぶ設定です。"
+      : "Choose one of the predefined options.";
+  }
+  const range = rangeConstraint(setting);
+  switch (valueKind(setting)) {
+    case "bool":
+      return ja
+        ? "オン/オフを切り替える設定です。"
+        : "On/off toggle.";
+    case "int32": {
+      const min = range?.min?.int32Value;
+      const max = range?.max?.int32Value;
+      if (min !== undefined || max !== undefined) {
+        return ja
+          ? `数値の設定です（範囲: ${min ?? "?"}〜${max ?? "?"}）。`
+          : `Numeric value (range: ${min ?? "?"}–${max ?? "?"}).`;
+      }
+      return ja ? "数値の設定です。" : "Numeric value.";
+    }
+    case "string":
+      return ja ? "文字列の設定です。" : "Text value.";
+    case "bytes":
+      return ja
+        ? "バイナリ値の設定です。形式は提供元モジュールのドキュメントを参照してください。"
+        : "Raw binary value; see the providing module's documentation for its format.";
+    case "behavior":
+      return ja
+        ? "ビヘイビア割り当て（ビヘイビア + param1/param2）の設定です。"
+        : "Behavior binding (behavior + param1/param2).";
+    default:
+      return ja
+        ? "このモジュール固有の設定です。詳細は提供元モジュールのドキュメントを参照してください。"
+        : "Module-specific setting; see the providing module's documentation.";
+  }
+}
+
+function resolveSettingDescription(
+  setting: Setting,
+  language: string,
+): string {
+  const known = KNOWN_FIELD_DESCRIPTIONS[fieldName(setting.key)];
+  if (known) return pickText(known, language);
+  const keyspace = KEYSPACE_PREFIX_DESCRIPTIONS.find((entry) =>
+    setting.key.startsWith(entry.prefix),
+  );
+  if (keyspace) return pickText(keyspace.text, language);
+  return describeSettingByShape(setting, language);
+}
+
 function findScrollableAncestor(el: Element | null): Element | null {
   let node = el?.parentElement ?? null;
   while (node) {
@@ -957,6 +1118,9 @@ interface SettingRowListProps {
   behaviors: Map<number, BehaviorDefinition>;
   customSettings: UseCustomSettingsReturn;
   describeField?: (field: string) => string | undefined;
+  // Fallback used when describeField yields nothing for a setting (generic
+  // description derived from key/type; see resolveSettingDescription).
+  describeSetting?: (setting: Setting) => string | undefined;
 }
 
 function SettingRowList({
@@ -965,6 +1129,7 @@ function SettingRowList({
   behaviors,
   customSettings,
   describeField,
+  describeSetting,
 }: SettingRowListProps) {
   return (
     <>
@@ -977,7 +1142,10 @@ function SettingRowList({
             setting.value?.arrayValue?.index ?? "scalar",
           ].join(":")}
           setting={setting}
-          description={describeField?.(fieldName(setting.key))}
+          description={
+            describeField?.(fieldName(setting.key)) ??
+            describeSetting?.(setting)
+          }
           layers={layers}
           behaviors={behaviors}
           onWrite={customSettings.writeSettingToMemory}
@@ -995,7 +1163,7 @@ export function CustomSettingsSectionCard({
   keymapLoading = false,
   defaultExpanded = false,
 }: CustomSettingsSectionCardProps) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   // Collapsed by default — a keyboard can report many subsystems with many
   // settings each, so showing them all expanded is overwhelming. When rendered
   // as a standalone detail pane, callers pass defaultExpanded to open it.
@@ -1044,6 +1212,8 @@ export function CustomSettingsSectionCard({
     ? sortedSettings.filter((setting) => !groupedKeys.has(setting))
     : sortedSettings;
 
+  const sectionDescription = SECTION_DESCRIPTIONS[section.identifier];
+
   return (
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
       <div className="flex flex-col gap-3 border-b border-[var(--color-border)] p-4 md:flex-row md:items-center md:justify-between">
@@ -1068,6 +1238,11 @@ export function CustomSettingsSectionCard({
             <h4 className="truncate text-sm font-medium text-[var(--color-text)]">
               {section.identifier}
             </h4>
+            {sectionDescription && (
+              <p className="text-[11px] leading-snug text-[var(--color-text-muted)]">
+                {pickText(sectionDescription, language)}
+              </p>
+            )}
             <p className="text-xs text-[var(--color-text-muted)]">
               {t("{{count}} settings", {
                 count: section.settings.length,
@@ -1194,6 +1369,9 @@ export function CustomSettingsSectionCard({
                     const description = PMW3610_FIELD_DESCRIPTIONS[field];
                     return description ? t(description) : undefined;
                   }}
+                  describeSetting={(setting) =>
+                    resolveSettingDescription(setting, language)
+                  }
                 />
               </div>
             </div>
@@ -1206,6 +1384,9 @@ export function CustomSettingsSectionCard({
                 layers={layers}
                 behaviors={behaviors}
                 customSettings={customSettings}
+                describeSetting={(setting) =>
+                  resolveSettingDescription(setting, language)
+                }
               />
             </div>
           )}
