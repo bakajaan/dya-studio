@@ -35,6 +35,7 @@ import { BLE_MANAGEMENT_SUBSYSTEM_IDENTIFIER } from "../hooks/useBLEProfiles";
 import { OS_DETECTION_SUBSYSTEM_IDENTIFIER } from "../hooks/useOsDetection";
 import { DEVTOOL_SUBSYSTEM_IDENTIFIER } from "../hooks/useDevtool";
 import { FAST_KEYMAP_SUBSYSTEM_IDENTIFIER } from "../hooks/useKeymapSource";
+import { BATTERY_HISTORY_SUBSYSTEM_IDENTIFIER } from "../components/BatteryHistorySection";
 
 // Identifiers of subsystems DYA Studio already has a dedicated UI for
 // (mirrors the `*_IDENTIFIER` constants exported by src/hooks/*.ts).
@@ -59,6 +60,8 @@ const SUPPORTED_SUBSYSTEM_IDENTIFIERS = new Set<string>([
   // Keymap tab's fast-loading path (see useKeymapSource), so DYA Studio still
   // fully handles it and it belongs with the already-supported subsystems.
   FAST_KEYMAP_SUBSYSTEM_IDENTIFIER,
+  // Battery history is shown in the Insights tab (BatteryHistorySection).
+  BATTERY_HISTORY_SUBSYSTEM_IDENTIFIER,
 ]);
 
 type Subsystem = ListCustomSubsystemResponse["subsystems"][number];
