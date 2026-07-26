@@ -20,7 +20,7 @@ jobs:
         # と不整合のため npm ci ではなく npm install を使用する暫定処置。
         # ローカルで npm install を実行して package-lock.json を更新コミットしたら
         # npm ci に戻すこと。
-        # (2026-07-26: フォークのActions有効化後にCIを起動させるためのコミット)
+        # (2026-07-26: Actionsの実行許可設定後にCIを起動させるための再トリガーコミット)
         run: npm install --no-audit --no-fund
       - name: Run lint
         run: npm run lint
