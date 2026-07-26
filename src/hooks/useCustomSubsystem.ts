@@ -1,7 +1,7 @@
 /**
  * App-wide wrapper around `@cormoran/zmk-studio-react-hook`'s
  * `useCustomSubsystem` that raises the per-RPC timeout for every custom
- * subsystem.
+ * subsystem and funnels every call through the global RPC queue.
  *
  * Custom-subsystem calls are wrapped in a `withTimeout` (the official
  * `call_rpc` is not), defaulting to 5s. Over slow BLE a single call can exceed
@@ -11,14 +11,24 @@
  * subsystem gets a generous default here. Callers may still pass an explicit
  * `timeout` to override it.
  *
+ * Crucially, that timeout also covers the wait for the library's shared mutex,
+ * so a second concurrent pipeline (two mounted tabs each loading the keymap,
+ * say) could push an otherwise healthy call past its deadline and desync the
+ * stream — the failure the user saw as "GATT Server is disconnected". To make
+ * that impossible, calls enter {@link enqueueRpc} first: queue waiting is
+ * untimed, and by the time the library is invoked the mutex is free, so the
+ * timeout only ever measures the real device round-trip. See `../lib/rpcQueue`.
+ *
  * All app hooks should import `useCustomSubsystem` from here rather than from
- * the library directly, so the raised timeout applies uniformly.
+ * the library directly, so the raised timeout and the queue apply uniformly.
  *
  * This wrapper also routes every call through the shared Studio-unlock gate
  * ({@link useStudioUnlock}): a call that fails because the subsystem is SECURED
  * and Studio is locked opens the unlock modal and is retried after unlock, so
  * consumers never have to detect the lock state themselves. Background/telemetry
  * hooks that must NOT surface a modal can opt out with `{ unlockGate: false }`.
+ * The gate sits OUTSIDE the queue on purpose: waiting for the user to unlock
+ * must never hold an RPC slot.
  */
 import { useCallback } from "react";
 import {
@@ -28,6 +38,7 @@ import {
   type UseCustomSubsystemTypedReturn,
 } from "@cormoran/zmk-studio-react-hook";
 import { logRpc } from "../lib/rpcLogging";
+import { enqueueRpc } from "../lib/rpcQueue";
 import { useStudioUnlock } from "./useStudioUnlock";
 import { studioLockErrorText } from "../lib/studioUnlock";
 
@@ -90,10 +101,13 @@ export function useCustomSubsystem<TReq, TRes>(
           `custom:${identifier}`,
           payload,
           () =>
-            baseCallRPC(payload, {
-              timeout: DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS,
-              ...options,
-            }),
+            // Queue first, THEN start the library's timeout (see module doc).
+            enqueueRpc(() =>
+              baseCallRPC(payload, {
+                timeout: DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS,
+                ...options,
+              }),
+            ),
           {
             request: () => payload.byteLength,
             response: (res) => res?.byteLength,
@@ -116,10 +130,12 @@ export function useCustomSubsystem<TReq, TRes>(
           `custom:${identifier}`,
           request,
           async () => {
-            const responsePayload = await baseCallRPC(payload, {
-              timeout: DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS,
-              ...options,
-            });
+            const responsePayload = await enqueueRpc(() =>
+              baseCallRPC(payload, {
+                timeout: DEFAULT_CUSTOM_SUBSYSTEM_TIMEOUT_MS,
+                ...options,
+              }),
+            );
             responseBytes = responsePayload?.byteLength;
             return responsePayload === null
               ? null

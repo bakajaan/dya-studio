@@ -8,12 +8,18 @@
  * duration, and encoded byte size — invaluable when debugging slow BLE
  * round-trips, oversized payloads, or a desynced response stream.
  *
- * All of this is gated behind {@link RPC_LOG_ENABLED} (local dev and the
+ * Both paths also funnel through the global RPC queue (see `./rpcQueue`) so
+ * only one call is ever handed to the transport at a time. That is not a
+ * logging concern, but it belongs at the same choke points: {@link loggedCallRpc}
+ * here for the official protocol, and `callRPC`/`call` in
+ * {@link useCustomSubsystem} for custom subsystems.
+ *
+ * All logging is gated behind {@link RPC_LOG_ENABLED} (local dev and the
  * dev/preview Cloudflare deployments; off for the production release), so the
  * release bundle gets neither the log noise nor the (tiny) timing overhead:
  * `logRpc` returns the bare `invoke()` promise and Vite tree-shakes the logging
  * branch away. Byte sizes are computed via lazy thunks that only run when
- * logging is enabled.
+ * logging is enabled. The queue, by contrast, is always active.
  */
 import {
   call_rpc,
@@ -27,6 +33,7 @@ import type {
 import type { NotificationSubscription } from "@cormoran/zmk-studio-react-hook";
 import { RPC_LOG_ENABLED } from "./viteEnv";
 import { decodeCustomNotification } from "./customNotificationCodecs";
+import { enqueueRpc } from "./rpcQueue";
 
 /** Monotonic id so a request line and its response line can be matched even
  * when several BLE calls are in flight at once. */
@@ -90,6 +97,11 @@ export async function logRpc<T>(
 /**
  * Drop-in replacement for `call_rpc` that logs request/response/duration/bytes
  * in dev. Same signature and return type — swap the import at call sites.
+ *
+ * Also the choke point where official-protocol calls enter the global RPC queue
+ * (see `./rpcQueue`): the app never hands the transport more than one call at a
+ * time, so a slow call can't push a concurrent one past its timeout and desync
+ * the response stream.
  */
 export function loggedCallRpc(
   conn: Parameters<typeof call_rpc>[0],
@@ -98,7 +110,7 @@ export function loggedCallRpc(
   return logRpc(
     describeOfficialRequest(request),
     request,
-    () => call_rpc(conn, request),
+    () => enqueueRpc(() => call_rpc(conn, request)),
     {
       request: () => protoByteLength(Request, request as Request),
       response: (res) => protoByteLength(RequestResponse, res),
