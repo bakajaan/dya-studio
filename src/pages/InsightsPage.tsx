@@ -1,6 +1,7 @@
 /**
  * Insights page: feature-parity additions inspired by other keymap tools.
  * - Key usage heatmap & layer statistics (Oryx-style)
+ * - Battery history recorded on the keyboard (zmk-module-battery-history)
  * - Printable cheat sheet (SVG/PNG) + ZMK keymap (dtsi) export (Oryx / Keymap Editor)
  * - Keymap snapshots with diff (version history)
  * - Typing trainer (Oryx-style)
@@ -28,6 +29,7 @@ import {
   IconWand,
 } from "@tabler/icons-react";
 import { ConnectionContext } from "../components/DeviceConnection";
+import { BatteryHistorySection } from "../components/BatteryHistorySection";
 import { KeyboardLayoutContext } from "../contexts/KeyboardLayoutContext";
 import { useKeymap } from "../hooks/useKeymap";
 import { useLanguage } from "../hooks/useLanguage";
@@ -634,6 +636,9 @@ export function InsightsPage() {
               </div>
             </section>
 
+            {/* Battery history (recorded on the keyboard) */}
+            <BatteryHistorySection />
+
             {/* Cheat sheet & dtsi export */}
             <section className="glass-card p-4">
               <div className="flex items-center gap-2 mb-3">
@@ -677,6 +682,21 @@ export function InsightsPage() {
                   {tr("ZMK keymap (.keymap)", "ZMKキーマップ (.keymap)")}
                 </button>
               </div>
+              {(!keymap.keymap || !activeLayout) && (
+                <p className="text-xs text-[var(--color-text-muted)] mt-3">
+                  {keymap.isLoading
+                    ? tr(
+                        "Loading the keymap from the keyboard... the export buttons become available once loading finishes (this can take a while over Bluetooth).",
+                        "キーボードからキーマップを読み込み中です… 読み込みが完了するとエクスポートボタンが押せるようになります（Bluetooth接続では時間がかかることがあります）。",
+                      )
+                    : keymap.error
+                      ? `${tr("Failed to load the keymap: ", "キーマップの読み込みに失敗しました: ")}${t(keymap.error)}`
+                      : tr(
+                          "The keymap has not been loaded yet.",
+                          "キーマップがまだ読み込まれていません。",
+                        )}
+                </p>
+              )}
             </section>
 
             {/* Snapshots */}
