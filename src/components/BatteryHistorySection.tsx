@@ -13,6 +13,20 @@
  * - 取得した履歴はブラウザに蓄積（batteryHistoryStore）し、本体の
  *   リングバッファから消えた古い分も含めて長期の推移を見られる。
  * - 上昇区間（充電）と下降区間（放電）を色分けして描画する。
+ *
+ * 【2026-07-27 追記 / なぜ enqueueRpc を通すのか】
+ * ここは以前、独自に ZMKCustomSubsystem を作って service.callRPC() を直接
+ * await していた。つまりアプリ全体の RPC 直列化キュー（{@link enqueueRpc}）を
+ * 唯一バイパスしていた箇所。さらにマウント直後に自動取得していたため、
+ * Insights タブを開くと「キューに並んだキーマップ全体の読み込み」と
+ * 「キューに並んでいない履歴取得」が同時に走り、ライブラリ側 mutex の待ちが
+ * キーマップ側の 30 秒タイムアウトを食い潰していた。タイムアウトした
+ * 呼び出しが mutex を途中で放棄すると応答ストリームがずれ、以降の全 RPC が
+ * 壊れて "GATT Server is disconnected" で切断される。
+ * → 症状: ヒートマップが出ない／エクスポート欄に「キーマップの読込に失敗」／
+ *   直後に BLE 切断・再接続。ファームウェアは無罪。
+ * 対策は2つ。(1) この画面の RPC も必ずキューを通す。(2) 自動取得は
+ * 「転送が本当に空いてから」に遅延させる（下の useEffect）。
  */
 import {
   useCallback,
@@ -31,6 +45,8 @@ import { ConnectionContext } from "./DeviceConnection";
 import { useLanguage } from "../hooks/useLanguage";
 import { useStudioUnlock } from "../hooks/useStudioUnlock";
 import { studioLockErrorText } from "../lib/studioUnlock";
+import { enqueueRpc, rpcQueueDepth } from "../lib/rpcQueue";
+import { hasKeymapLoadListeners } from "../lib/keymapLoadCoordinator";
 import {
   clearBatteryHistory,
   loadBatteryHistory,
@@ -49,6 +65,17 @@ import {
 // Custom subsystem identifier -- must match the firmware registration in
 // cormoran/zmk-module-battery-history.
 export const BATTERY_HISTORY_SUBSYSTEM_IDENTIFIER = "zmk__battery_history";
+
+/** How often the auto-fetch gate re-checks whether the transport is idle. */
+const IDLE_POLL_MS = 700;
+
+/**
+ * Consecutive idle polls required before the automatic fetch is allowed to
+ * start. A keymap load is a long SEQUENCE of round-trips, so the queue is
+ * momentarily empty between two of them; a single idle sample is not enough
+ * evidence that the load has finished.
+ */
+const IDLE_POLLS_REQUIRED = 3;
 
 interface StreamingProgress {
   current: number;
@@ -105,6 +132,7 @@ export function BatteryHistorySection() {
     Record<number, StreamingProgress>
   >({});
   const [isLoading, setIsLoading] = useState(false);
+  const [isWaitingForIdle, setIsWaitingForIdle] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
   const buffersRef = useRef<Record<number, BatteryPoint[]>>({});
@@ -218,8 +246,10 @@ export function BatteryHistorySection() {
       const payload = BatteryHistoryRequest.encode(
         BatteryHistoryRequest.create({ getHistory: {} }),
       ).finish();
+      // 必ず enqueueRpc を通す。unlock ゲートはキューの外側（キュー枠を
+      // 掴んだままユーザーの操作を待たないため）。
       const responsePayload = await runWithUnlock(() =>
-        service.callRPC(payload),
+        enqueueRpc(() => service.callRPC(payload)),
       );
       // The response is just an acknowledgement; data arrives via the
       // streaming notifications handled above.
@@ -270,7 +300,7 @@ export function BatteryHistorySection() {
         BatteryHistoryRequest.create({ clearHistory: {} }),
       ).finish();
       const responsePayload = await runWithUnlock(() =>
-        service.callRPC(payload),
+        enqueueRpc(() => service.callRPC(payload)),
       );
       if (responsePayload) {
         const response = BatteryHistoryResponse.decode(responsePayload);
@@ -301,12 +331,44 @@ export function BatteryHistorySection() {
     }
   }, [zmkApp, subsystem, runWithUnlock, tr]);
 
-  // Auto-fetch once per connection when the subsystem is available.
+  /**
+   * Auto-fetch once per connection -- but only once the transport is genuinely
+   * idle.
+   *
+   * Opening Insights mounts this section AND starts InsightsPage's keymap load
+   * at the same time. Firing the history transfer right then is what used to
+   * kill the session (see the module doc). The queue would now keep the two
+   * calls from interleaving anyway, but a ~50-entry notification stream still
+   * competes with the keymap load for BLE airtime, so we simply wait for the
+   * load to finish before asking.
+   */
   useEffect(() => {
-    if (subsystem && !autoFetchedRef.current) {
+    if (!subsystem || autoFetchedRef.current) return;
+
+    let idlePolls = 0;
+    setIsWaitingForIdle(true);
+
+    const timer = window.setInterval(() => {
+      // rpcQueueDepth() covers calls queued or in flight; the coordinator flag
+      // covers the fast path's deferred layers/behaviors phase, which fetches
+      // in the background after the first paint.
+      if (rpcQueueDepth() > 0 || hasKeymapLoadListeners()) {
+        idlePolls = 0;
+        return;
+      }
+      idlePolls += 1;
+      if (idlePolls < IDLE_POLLS_REQUIRED) return;
+
+      window.clearInterval(timer);
       autoFetchedRef.current = true;
+      setIsWaitingForIdle(false);
       void fetchHistory();
-    }
+    }, IDLE_POLL_MS);
+
+    return () => {
+      window.clearInterval(timer);
+      setIsWaitingForIdle(false);
+    };
   }, [subsystem, fetchHistory]);
 
   // Reset the in-flight state when disconnected so a reconnect starts fresh.
@@ -472,6 +534,15 @@ export function BatteryHistorySection() {
             <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3">
               <p className="text-sm text-red-400">{error}</p>
             </div>
+          )}
+
+          {isWaitingForIdle && streamingSources.length === 0 && (
+            <p className="mb-2 text-xs text-[var(--color-text-muted)]">
+              {tr(
+                "Waiting for the keymap transfer to finish before reading the history…",
+                "キーマップの転送が終わるのを待ってから履歴を取得します…",
+              )}
+            </p>
           )}
 
           {streamingSources.map((sourceId) => {
