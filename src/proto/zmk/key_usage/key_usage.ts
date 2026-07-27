@@ -10,10 +10,16 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 export const protobufPackage = "zmk.key_usage";
 
 /**
- * Ask the keyboard for every non-zero counter. The counters themselves are
- * streamed back as StatsChunk notifications.
+ * Ask the keyboard for one page of non-zero counters.
+ *
+ * `cursor` is 0 for the first page, then the `next_cursor` returned by the
+ * previous page. The counters travel in the response itself on purpose: a
+ * Studio notification bigger than a single BLE indicate (27 bytes) cannot be
+ * raised from the system work queue without deadlocking it, because the work
+ * item that drains the RPC TX ring buffer runs on that same queue.
  */
 export interface GetStatsRequest {
+  cursor: number;
 }
 
 /** Drop every counter, both in RAM and in persistent storage. */
@@ -49,8 +55,21 @@ export interface StatsMetadata {
   maxKeycode: number;
 }
 
+/**
+ * One page of counters. Metadata is repeated on every page so the UI can show
+ * totals as soon as the first page lands.
+ */
 export interface GetStatsResponse {
   metadata?: StatsMetadata | undefined;
+  positions: PositionEntry[];
+  keycodes: KeycodeEntry[];
+  /** Cursor for the next GetStatsRequest. Meaningless once is_last is set. */
+  nextCursor: number;
+  /**
+   * True on the final page. A keyboard with no counters answers the very
+   * first request with an empty page that already has is_last set.
+   */
+  isLast: boolean;
 }
 
 export interface ClearStatsResponse {
@@ -76,26 +95,15 @@ export interface Response {
   saveStats?: SaveStatsResponse | undefined;
 }
 
-/** One chunk of streamed counters. */
-export interface StatsChunk {
-  positions: PositionEntry[];
-  keycodes: KeycodeEntry[];
-  /** True on the final chunk of a stream. */
-  isLast: boolean;
-  /** 0-based index of this chunk within the stream. */
-  chunkIndex: number;
-}
-
-export interface Notification {
-  stats?: StatsChunk | undefined;
-}
-
 function createBaseGetStatsRequest(): GetStatsRequest {
-  return {};
+  return { cursor: 0 };
 }
 
 export const GetStatsRequest: MessageFns<GetStatsRequest> = {
-  encode(_: GetStatsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(message: GetStatsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.cursor !== 0) {
+      writer.uint32(8).uint32(message.cursor);
+    }
     return writer;
   },
 
@@ -106,6 +114,14 @@ export const GetStatsRequest: MessageFns<GetStatsRequest> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.cursor = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -118,8 +134,9 @@ export const GetStatsRequest: MessageFns<GetStatsRequest> = {
   create(base?: DeepPartial<GetStatsRequest>): GetStatsRequest {
     return GetStatsRequest.fromPartial(base ?? {});
   },
-  fromPartial(_: DeepPartial<GetStatsRequest>): GetStatsRequest {
+  fromPartial(object: DeepPartial<GetStatsRequest>): GetStatsRequest {
     const message = createBaseGetStatsRequest();
+    message.cursor = object.cursor ?? 0;
     return message;
   },
 };
@@ -415,13 +432,25 @@ export const StatsMetadata: MessageFns<StatsMetadata> = {
 };
 
 function createBaseGetStatsResponse(): GetStatsResponse {
-  return { metadata: undefined };
+  return { metadata: undefined, positions: [], keycodes: [], nextCursor: 0, isLast: false };
 }
 
 export const GetStatsResponse: MessageFns<GetStatsResponse> = {
   encode(message: GetStatsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.metadata !== undefined) {
       StatsMetadata.encode(message.metadata, writer.uint32(10).fork()).join();
+    }
+    for (const v of message.positions) {
+      PositionEntry.encode(v!, writer.uint32(18).fork()).join();
+    }
+    for (const v of message.keycodes) {
+      KeycodeEntry.encode(v!, writer.uint32(26).fork()).join();
+    }
+    if (message.nextCursor !== 0) {
+      writer.uint32(32).uint32(message.nextCursor);
+    }
+    if (message.isLast !== false) {
+      writer.uint32(40).bool(message.isLast);
     }
     return writer;
   },
@@ -441,6 +470,38 @@ export const GetStatsResponse: MessageFns<GetStatsResponse> = {
           message.metadata = StatsMetadata.decode(reader, reader.uint32());
           continue;
         }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.positions.push(PositionEntry.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.keycodes.push(KeycodeEntry.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.nextCursor = reader.uint32();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.isLast = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -458,6 +519,10 @@ export const GetStatsResponse: MessageFns<GetStatsResponse> = {
     message.metadata = (object.metadata !== undefined && object.metadata !== null)
       ? StatsMetadata.fromPartial(object.metadata)
       : undefined;
+    message.positions = object.positions?.map((e) => PositionEntry.fromPartial(e)) || [];
+    message.keycodes = object.keycodes?.map((e) => KeycodeEntry.fromPartial(e)) || [];
+    message.nextCursor = object.nextCursor ?? 0;
+    message.isLast = object.isLast ?? false;
     return message;
   },
 };
@@ -737,136 +802,6 @@ export const Response: MessageFns<Response> = {
       : undefined;
     message.saveStats = (object.saveStats !== undefined && object.saveStats !== null)
       ? SaveStatsResponse.fromPartial(object.saveStats)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseStatsChunk(): StatsChunk {
-  return { positions: [], keycodes: [], isLast: false, chunkIndex: 0 };
-}
-
-export const StatsChunk: MessageFns<StatsChunk> = {
-  encode(message: StatsChunk, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    for (const v of message.positions) {
-      PositionEntry.encode(v!, writer.uint32(10).fork()).join();
-    }
-    for (const v of message.keycodes) {
-      KeycodeEntry.encode(v!, writer.uint32(18).fork()).join();
-    }
-    if (message.isLast !== false) {
-      writer.uint32(24).bool(message.isLast);
-    }
-    if (message.chunkIndex !== 0) {
-      writer.uint32(32).uint32(message.chunkIndex);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): StatsChunk {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseStatsChunk();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.positions.push(PositionEntry.decode(reader, reader.uint32()));
-          continue;
-        }
-        case 2: {
-          if (tag !== 18) {
-            break;
-          }
-
-          message.keycodes.push(KeycodeEntry.decode(reader, reader.uint32()));
-          continue;
-        }
-        case 3: {
-          if (tag !== 24) {
-            break;
-          }
-
-          message.isLast = reader.bool();
-          continue;
-        }
-        case 4: {
-          if (tag !== 32) {
-            break;
-          }
-
-          message.chunkIndex = reader.uint32();
-          continue;
-        }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  create(base?: DeepPartial<StatsChunk>): StatsChunk {
-    return StatsChunk.fromPartial(base ?? {});
-  },
-  fromPartial(object: DeepPartial<StatsChunk>): StatsChunk {
-    const message = createBaseStatsChunk();
-    message.positions = object.positions?.map((e) => PositionEntry.fromPartial(e)) || [];
-    message.keycodes = object.keycodes?.map((e) => KeycodeEntry.fromPartial(e)) || [];
-    message.isLast = object.isLast ?? false;
-    message.chunkIndex = object.chunkIndex ?? 0;
-    return message;
-  },
-};
-
-function createBaseNotification(): Notification {
-  return { stats: undefined };
-}
-
-export const Notification: MessageFns<Notification> = {
-  encode(message: Notification, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.stats !== undefined) {
-      StatsChunk.encode(message.stats, writer.uint32(10).fork()).join();
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): Notification {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseNotification();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.stats = StatsChunk.decode(reader, reader.uint32());
-          continue;
-        }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  create(base?: DeepPartial<Notification>): Notification {
-    return Notification.fromPartial(base ?? {});
-  },
-  fromPartial(object: DeepPartial<Notification>): Notification {
-    const message = createBaseNotification();
-    message.stats = (object.stats !== undefined && object.stats !== null)
-      ? StatsChunk.fromPartial(object.stats)
       : undefined;
     return message;
   },

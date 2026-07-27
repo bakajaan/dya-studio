@@ -5,29 +5,40 @@
  * Studioを開いていない間の打鍵も (レイヤー, キー位置) 別と HIDキーコード別に
  * 数えられ、フラッシュに保存されるので再起動をまたいで残る。
  *
- * 転送方式の注意:
- * - GetStats の応答には合計値などのメタデータだけが入り、カウンタ本体は
- *   `StatsChunk` 通知として 8件ずつ非同期に流れてくる (ファームの stream_work)。
- *   最終チャンクには必ず `isLast` が立つ。カウンタが1件も無い場合も
- *   「空 + isLast」のチャンクが1つ届くため、必ずストリーム完了を待てる。
- * - RPCは必ず {@link useCustomSubsystem} 経由で呼ぶ (= グローバルRPCキュー経由・
- *   タイムアウトはキュー待ちを含まない)。ここで外側から `Promise.race` を
- *   かけてRPCを打ち切ってはいけない。応答ストリームが崩れて
- *   "GATT Server is disconnected" の連鎖に化ける。
- *   通知の待ち合わせタイムアウトはRPCではなく通知に対するものなので安全。
- * - 切断中の表示はエフェクト内の setState でリセットせず、戻り値を `ready` で
- *   ゲートして消す (lintルール react-hooks/set-state-in-effect を踏まないため)。
+ * 【2026-07-27 仕様変更】通知ストリーム廃止 → カーソル方式のページング取得。
+ * 旧仕様は GetStats に即応答し、カウンタ本体を `StatsChunk` 通知として
+ * システムワークキューから送っていた。しかしBLEトランスポートは1回の
+ * indicate で27バイトしか送れず、続きの送出はシステムワークキュー上の
+ * ワークアイテムが行う。そのキューを我々のストリームワークがTXリング
+ * バッファ (64バイト) の空き待ちで占有するため、キュー自体がデッドロック
+ * する。input_stream のキーイベント通知は1 indicate に収まるので無事だが、
+ * 統計チャンクは絶対に収まらない。結果、チャンクが1つも届かず必ず
+ * タイムアウトし、ウォッチドッグには sysworkq のフリーズが記録されていた。
+ *
+ * 新仕様では GetStats に `cursor` を渡し、応答そのものにカウンタを載せて
+ * 返す。1ページ = 通常のRPC 1往復なので、
+ * - 共有RPCキュー経由でタイムアウトはキュー待ちを含まない
+ * - 途中で失敗しても、そのページだけ再試行すればよい
+ * - 通知の到達性に一切依存しない
+ * となる。ここで外側から `Promise.race` をかけてRPCを打ち切ってはいけない
+ * (応答ストリームが崩れて "GATT Server is disconnected" の連鎖に化ける)。
+ *
+ * 切断中の表示はエフェクト内の setState でリセットせず、戻り値を `ready` で
+ * ゲートして消す (lintルール react-hooks/set-state-in-effect を踏まないため)。
  */
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
-import { ZMKAppContext } from "@cormoran/zmk-studio-react-hook";
-import type { CustomNotification } from "@zmkfirmware/zmk-studio-ts-client/custom";
+import { useCallback, useState } from "react";
 import { useCustomSubsystem, useLockAwareCall } from "./useCustomSubsystem";
-import { Notification, Request, Response } from "../proto/zmk/key_usage/key_usage";
+import { Request, Response } from "../proto/zmk/key_usage/key_usage";
 
 export const KEY_USAGE_IDENTIFIER = "zmk__key_usage";
 
-/** チャンク列の待ち合わせ上限。RPC自体のタイムアウトではない (ファイルdoc参照)。 */
-export const KEY_USAGE_STREAM_TIMEOUT_MS = 60_000;
+/**
+ * ページ取得の打ち切り上限。ファームが `is_last` を返さない/カーソルが
+ * 進まないといった異常時に無限ループしないための安全弁。
+ * 1ページ12件・最大 (レイヤー数×キー数 + キーコード数) 件しかないので、
+ * 正常時にこの値へ到達することはない。
+ */
+export const KEY_USAGE_MAX_PAGES = 512;
 
 const CODEC = {
   encode: (request: Request) => Request.encode(request).finish(),
@@ -68,6 +79,8 @@ export interface UseKeyUsageReturn {
   isLoading: boolean;
   isMutating: boolean;
   error: string | null;
+  /** 取得済みページ数 (読み出し中の進捗表示用)。 */
+  loadedPages: number;
   /** キーボードから累積カウンタを読み出す。 */
   fetchStats: () => Promise<void>;
   /** キーボード側のカウンタを全消去する (フラッシュも含む)。 */
@@ -77,19 +90,18 @@ export interface UseKeyUsageReturn {
   clearError: () => void;
 }
 
-interface PendingStream {
-  positions: KeyUsagePositionStat[];
-  keycodes: KeyUsageKeycodeStat[];
-  finish: () => void;
-  fail: (err: unknown) => void;
-}
+const EMPTY_METADATA: KeyUsageMetadata = {
+  totalPresses: 0,
+  maxLayers: 0,
+  maxPositions: 0,
+  maxKeycode: 0,
+};
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
 export function useKeyUsage(): UseKeyUsageReturn {
-  const zmkApp = useContext(ZMKAppContext);
   const { subsystem, ready, call } = useCustomSubsystem(
     KEY_USAGE_IDENTIFIER,
     CODEC,
@@ -98,129 +110,93 @@ export function useKeyUsage(): UseKeyUsageReturn {
   const [stats, setStats] = useState<KeyboardKeyUsage | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
+  const [loadedPages, setLoadedPages] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const safeCall = useLockAwareCall(call, setError);
-  const pendingRef = useRef<PendingStream | null>(null);
-  const subsystemIndex = subsystem?.index;
-
-  // チャンク通知の受信。読み出し中 (pendingRef が立っている間) だけ集める。
-  useEffect(() => {
-    if (!zmkApp || subsystemIndex === undefined) return;
-
-    return zmkApp.onNotification({
-      type: "custom",
-      subsystemIndex,
-      callback: (customNotification: CustomNotification) => {
-        const pending = pendingRef.current;
-        if (!pending) return;
-
-        try {
-          const notification = Notification.decode(customNotification.payload);
-          const chunk = notification.stats;
-          if (!chunk) return;
-
-          for (const entry of chunk.positions) {
-            pending.positions.push({
-              layer: entry.layer,
-              position: entry.position,
-              count: entry.count,
-            });
-          }
-          for (const entry of chunk.keycodes) {
-            pending.keycodes.push({
-              usagePage: entry.usagePage,
-              keycode: entry.keycode,
-              count: entry.count,
-            });
-          }
-
-          if (chunk.isLast) {
-            pending.finish();
-          }
-        } catch (err) {
-          pending.fail(err);
-        }
-      },
-    });
-  }, [zmkApp, subsystemIndex]);
-
-  // 切断したら読み出し中のストリームを畳む。setState は行わないので
-  // react-hooks/set-state-in-effect には踏まれない。
-  useEffect(() => {
-    if (ready) return;
-    pendingRef.current?.finish();
-    pendingRef.current = null;
-  }, [ready]);
 
   const fetchStats = useCallback(async () => {
     if (!ready) return;
 
     setIsLoading(true);
+    setLoadedPages(0);
     setError(null);
 
-    const pending: PendingStream = {
-      positions: [],
-      keycodes: [],
-      finish: () => undefined,
-      fail: () => undefined,
-    };
-
-    const streamed = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pendingRef.current = null;
-        reject(new Error("Timed out waiting for key usage statistics"));
-      }, KEY_USAGE_STREAM_TIMEOUT_MS);
-
-      pending.finish = () => {
-        clearTimeout(timer);
-        pendingRef.current = null;
-        resolve();
-      };
-      pending.fail = (err: unknown) => {
-        clearTimeout(timer);
-        pendingRef.current = null;
-        reject(
-          err instanceof Error
-            ? err
-            : new Error("Failed to decode key usage statistics"),
-        );
-      };
-    });
-    // 通知は応答より先に届き得るので、要求を出す前に集計先を用意しておく。
-    pendingRef.current = pending;
-
     try {
-      const response = await safeCall(Request.create({ getStats: {} }));
+      const positions: KeyUsagePositionStat[] = [];
+      const keycodes: KeyUsageKeycodeStat[] = [];
+      let metadata: KeyUsageMetadata = EMPTY_METADATA;
+      let cursor = 0;
 
-      if (!response) {
-        // ロック中/応答なし。ストリームは来ないので待ち合わせを解除する。
-        pending.finish();
-        return;
+      for (let page = 0; page < KEY_USAGE_MAX_PAGES; page++) {
+        const response = await safeCall(
+          Request.create({ getStats: { cursor } }),
+        );
+
+        // ロック中/応答なし。safeCall 側でメッセージを立てている。
+        if (!response) return;
+
+        if (response.error) {
+          setError(response.error.message);
+          return;
+        }
+
+        const payload = response.getStats;
+        if (!payload) {
+          setError("The keyboard returned an unexpected key usage response");
+          return;
+        }
+
+        if (payload.metadata) {
+          metadata = {
+            totalPresses: payload.metadata.totalPresses,
+            maxLayers: payload.metadata.maxLayers,
+            maxPositions: payload.metadata.maxPositions,
+            maxKeycode: payload.metadata.maxKeycode,
+          };
+        }
+
+        for (const entry of payload.positions) {
+          positions.push({
+            layer: entry.layer,
+            position: entry.position,
+            count: entry.count,
+          });
+        }
+        for (const entry of payload.keycodes) {
+          keycodes.push({
+            usagePage: entry.usagePage,
+            keycode: entry.keycode,
+            count: entry.count,
+          });
+        }
+
+        setLoadedPages(page + 1);
+
+        if (payload.isLast) {
+          setStats({
+            metadata,
+            positions,
+            keycodes,
+            fetchedAt: Date.now(),
+          });
+          return;
+        }
+
+        // カーソルが進まないファームは古い (通知ストリーム方式) 可能性が高い。
+        // そのまま回すと無限ループになるので、はっきり伝えて止める。
+        if (payload.nextCursor <= cursor) {
+          setError(
+            "The keyboard firmware does not support paged key usage reads. Please flash a firmware built with zmk-feature-key-usage bf52958 or newer.",
+          );
+          return;
+        }
+
+        cursor = payload.nextCursor;
       }
-      if (response.error) {
-        setError(response.error.message);
-        pending.finish();
-        return;
-      }
 
-      const metadata = response.getStats?.metadata;
-
-      await streamed;
-
-      setStats({
-        metadata: {
-          totalPresses: metadata?.totalPresses ?? 0,
-          maxLayers: metadata?.maxLayers ?? 0,
-          maxPositions: metadata?.maxPositions ?? 0,
-          maxKeycode: metadata?.maxKeycode ?? 0,
-        },
-        positions: pending.positions,
-        keycodes: pending.keycodes,
-        fetchedAt: Date.now(),
-      });
+      setError("Gave up reading key usage statistics after too many pages");
     } catch (err) {
-      pendingRef.current = null;
       setError(errorMessage(err, "Failed to load key usage statistics"));
     } finally {
       setIsLoading(false);
@@ -284,6 +260,7 @@ export function useKeyUsage(): UseKeyUsageReturn {
     isLoading: ready ? isLoading : false,
     isMutating: ready ? isMutating : false,
     error: ready ? error : null,
+    loadedPages: ready ? loadedPages : 0,
     fetchStats,
     clearStats,
     saveStats,
