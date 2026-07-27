@@ -32,7 +32,7 @@ import {
 } from "../lib/keyUsageExport";
 import {
   buildKeycodeUsageMap,
-  computePredictedCountsByPosition,
+  computePredictedUsage,
   maxOfCounts,
   type PredictionScope,
 } from "../lib/keymapUsagePrediction";
@@ -55,16 +55,17 @@ const TOP_KEYCODE_COUNT = 8;
  * - "Live" tab: presses recorded in this browser while Stream is on (shared
  *   with the Insights tab's heatmap via useLiveKeyUsageStats).
  * - "Device" tab: cumulative counters stored on the keyboard itself.
- * - "Prediction" tab: projects the device's per-keycode press history onto
- *   the CURRENT (possibly unsaved) key bindings, so reassigning a key
- *   updates the estimated heatmap immediately — see keymapUsagePrediction.ts
- *   for the approximation this relies on.
+ * - "Prediction" tab: redistributes the device's per-position history over the
+ *   CURRENT (possibly unsaved) bindings, so an untouched keymap shows exactly
+ *   the device's own numbers and a reassigned key carries its history to its
+ *   new home — see keymapUsagePrediction.ts.
  */
 export function KeymapInsightsPanel({
   activeLayout,
   layers,
   layersForSelector,
   behaviors,
+  originalBindings,
   keyboardLayout,
   runtimeMacros,
   highlightedKeys,
@@ -77,6 +78,9 @@ export function KeymapInsightsPanel({
   layers: Layer[];
   layersForSelector: Array<{ id: number; name: string }>;
   behaviors: Map<number, BehaviorDefinition>;
+  /** Last-saved bindings (useKeymap.originalBindings), keyed `layerId:position`.
+   * The prediction needs them to know where each binding used to be. */
+  originalBindings: Map<string, BehaviorBinding>;
   keyboardLayout: KeyboardLayoutType;
   runtimeMacros: Array<{ slot: number; name?: string }>;
   highlightedKeys: ReadonlySet<number>;
@@ -259,41 +263,45 @@ export function KeymapInsightsPanel({
   }, [deviceUsage, tr]);
 
   // --- Prediction tab -------------------------------------------------
+  // The prediction redistributes the device's per-(layer, position) history
+  // according to how bindings moved, so an untouched keymap reproduces the
+  // "On device" numbers exactly. Per-keycode counters are only used as a
+  // fallback for bindings that are brand new (see keymapUsagePrediction.ts).
   const keycodeUsageMap = useMemo(
     () => buildKeycodeUsageMap(deviceKeycodes),
     [deviceKeycodes],
   );
   const predictionScopeValue: PredictionScope =
     predictionScope === "all" ? "all" : Number(predictionScope);
-  const predictedCountsByPosition = useMemo(
+  const prediction = useMemo(
     () =>
-      computePredictedCountsByPosition(
+      computePredictedUsage({
         layers,
         behaviors,
-        keycodeUsageMap,
-        predictionScopeValue,
-      ),
-    [layers, behaviors, keycodeUsageMap, predictionScopeValue],
+        originalBindings,
+        devicePositions,
+        keycodeUsage: keycodeUsageMap,
+        scope: predictionScopeValue,
+      }),
+    [
+      layers,
+      behaviors,
+      originalBindings,
+      devicePositions,
+      keycodeUsageMap,
+      predictionScopeValue,
+    ],
   );
-  const predictedMaxCount = useMemo(
-    () => maxOfCounts(predictedCountsByPosition),
-    [predictedCountsByPosition],
-  );
-  const predictedTotal = useMemo(() => {
-    let sum = 0;
-    predictedCountsByPosition.forEach((count) => {
-      sum += count;
-    });
-    return sum;
-  }, [predictedCountsByPosition]);
+  const hasPredictionData =
+    devicePositions.length > 0 || keycodeUsageMap.size > 0;
   const predictionLabelLayerIndex =
     predictionScopeValue === "all" ? 0 : predictionScopeValue;
   const topPredictedKeys = useMemo(() => {
-    return Array.from(predictedCountsByPosition.entries())
+    return Array.from(prediction.countsByPosition.entries())
       .map(([position, count]) => ({ position, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
-  }, [predictedCountsByPosition]);
+  }, [prediction]);
 
   return (
     <aside className="glass-card p-4 max-h-[calc(100vh-3rem)] overflow-y-auto">
@@ -682,8 +690,8 @@ export function KeymapInsightsPanel({
         <div className="space-y-3">
           <p className="text-xs text-[var(--color-text-muted)]">
             {tr(
-              "Estimates how busy each key would be under the layout you're currently editing, by projecting the device's per-key (not per-position) press history onto the new bindings. Read the device counters on the “On device” tab first.",
-              "編集中のキー配置で各キーがどれくらい使われそうかを、デバイス上のキー別（位置別ではない）打鍵履歴を新しい割り当てに当てはめて見積もります。まず「デバイス上」タブでカウンタを読み出してください。",
+              "Shows how busy each key would be under the layout you're currently editing: every key keeps its measured history, and a key you reassign carries that history to its new place. With an untouched keymap this matches the “On device” numbers exactly. Read the device counters on the “On device” tab first.",
+              "編集中のキー配置で各キーがどれくらい使われるかを表示します。各キーは実測の履歴をそのまま保ち、割り当てを変えたキーはその履歴を新しい位置に持っていきます。キーマップを変えていなければ「デバイス上」と完全に一致します。まず「デバイス上」タブでカウンタを読み出してください。",
             )}
           </p>
 
@@ -708,12 +716,12 @@ export function KeymapInsightsPanel({
             </select>
           </div>
 
-          {keycodeUsageMap.size === 0 && (
+          {!hasPredictionData && (
             <div className="flex items-center gap-2">
               <p className="text-xs text-[var(--color-text-muted)] flex-1">
                 {tr(
-                  "No device keycode history yet.",
-                  "デバイスのキー別履歴がまだありません。",
+                  "No device history yet.",
+                  "デバイスの打鍵履歴がまだありません。",
                 )}
               </p>
               <button
@@ -732,21 +740,55 @@ export function KeymapInsightsPanel({
             </div>
           )}
 
-          {activeLayout && keycodeUsageMap.size > 0 && (
+          {hasPredictionData && !prediction.hasPositionHistory && (
+            <p className="text-xs text-[var(--color-warning)]">
+              {tr(
+                "Only per-keycode counters were read, so this is a rough estimate and will not match the device numbers.",
+                "キーコード別のカウンタしか読めていないため、ここの数字は粗い見積もりで、デバイス上の数字とは一致しません。",
+              )}
+            </p>
+          )}
+
+          {activeLayout && hasPredictionData && (
             <KeyUsageHeatmapSvg
               layout={activeLayout}
               getCount={(position) =>
-                predictedCountsByPosition.get(position) ?? 0
+                prediction.countsByPosition.get(position) ?? 0
               }
-              maxCount={predictedMaxCount}
+              maxCount={prediction.maxCount}
             />
           )}
 
-          {keycodeUsageMap.size > 0 && (
+          {hasPredictionData && (
             <>
               <p className="text-xs text-[var(--color-text-muted)]">
-                {tr("Predicted total", "予測総打鍵数")}: {predictedTotal}
+                {tr("Predicted total", "予測総打鍵数")}: {prediction.total}
               </p>
+              {prediction.hasPositionHistory && prediction.matchesDevice && (
+                <p className="text-xs text-[var(--color-neon)]">
+                  {tr(
+                    "Keymap unchanged — identical to the device's measured counts.",
+                    "キーマップは未変更です。デバイスの実測値と完全に同じになっています。",
+                  )}
+                </p>
+              )}
+              {prediction.hasPositionHistory &&
+                prediction.estimatedPositions.size > 0 && (
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {tr(
+                      `Estimated keys (moved or newly assigned): ${prediction.estimatedPositions.size}`,
+                      `推定で表示しているキー（移動・新規割り当て）: ${prediction.estimatedPositions.size}`,
+                    )}
+                  </p>
+                )}
+              {prediction.unassigned > 0 && (
+                <p className="text-xs text-[var(--color-warning)]">
+                  {tr(
+                    `Presses with nowhere to go (binding removed from the keymap): ${prediction.unassigned}`,
+                    `行き先のない打鍵（割り当てがキーマップから消えた分）: ${prediction.unassigned}`,
+                  )}
+                </p>
+              )}
               <div>
                 <h3 className="text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
                   {tr("Predicted top keys", "予測される打鍵の多いキー")}
@@ -771,6 +813,11 @@ export function KeymapInsightsPanel({
                       </span>
                       <span className="text-[var(--color-text-muted)]">
                         {count}
+                        {prediction.estimatedPositions.has(position) && (
+                          <span className="ml-1 text-[10px] text-[var(--color-text-muted)]">
+                            {tr("(est.)", "（推定）")}
+                          </span>
+                        )}
                       </span>
                     </li>
                   ))}
