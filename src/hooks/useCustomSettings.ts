@@ -25,8 +25,28 @@ const CODEC = {
 };
 export const CUSTOM_SETTINGS_SOURCE_ALL = 0xffffffff;
 
+// Quiet period after the last ListItem notification before the list is
+// considered complete. This timer only ever starts once notifications are
+// already flowing (or the request has returned), so it never races the RPC
+// queue.
 const LIST_NOTIFICATION_TIMEOUT_MS = 750;
-const LIST_REQUEST_TIMEOUT_MS = 5000;
+
+/**
+ * Deadline for the ListSettings round-trip, passed to the subsystem call as its
+ * per-call `timeout`.
+ *
+ * It must NOT be applied as an outer `Promise.race` around the call: every RPC
+ * first waits (untimed) for a slot in the global queue (see `../lib/rpcQueue`),
+ * so an outer clock would count queue waiting as if the device were slow. When
+ * another transfer held the queue (the Insights keymap load, the battery-history
+ * stream), that made the list request "time out" before it had even been handed
+ * to the transport; the abandoned call then desynced the shared response stream
+ * and the connection dropped. Handed to the library instead, the clock starts
+ * only after the call is admitted from the queue, so it measures the real device
+ * round-trip. Generous, because BLE round-trips for a full settings list are
+ * slow.
+ */
+const LIST_REQUEST_TIMEOUT_MS = 15000;
 
 export interface CustomSettingsSection {
   customSubsystemIndex: number;
@@ -91,24 +111,10 @@ function valueWithArrayShape(
   };
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+/** True for the library's per-call timeout rejection, so it can be reported
+ * with the localized "list timed out" message instead of a raw English one. */
+function isTimeoutError(err: unknown): boolean {
+  return err instanceof Error && /time(?:d)?\s*out/i.test(err.message);
 }
 
 export interface UseCustomSettingsOptions {
@@ -160,12 +166,15 @@ export function useCustomSettings(
   }, [subsystemIdentifier, zmkApp?.state.customSubsystems?.subsystems]);
 
   const callCustomRequest = useCallback(
-    async (request: Request): Promise<Response> => {
+    async (
+      request: Request,
+      callOptions?: { timeout?: number },
+    ): Promise<Response> => {
       if (!ready) {
         throw new Error(t("Custom settings subsystem is not available"));
       }
 
-      const response = await call(request);
+      const response = await call(request, callOptions);
       if (!response) {
         throw new Error(t("Empty custom settings response"));
       }
@@ -246,8 +255,12 @@ export function useCustomSettings(
     });
 
     try {
-      const response = await withTimeout(
-        callCustomRequest(
+      // The deadline rides along as the per-call device timeout (see
+      // LIST_REQUEST_TIMEOUT_MS): it must start after the queue admits the
+      // call, never around the whole await.
+      let response: Response;
+      try {
+        response = await callCustomRequest(
           Request.create({
             listSettings: {
               scope: listScope,
@@ -258,10 +271,14 @@ export function useCustomSettings(
               requireDefault: true,
             },
           }),
-        ),
-        LIST_REQUEST_TIMEOUT_MS,
-        t("Custom settings list timed out"),
-      );
+          { timeout: LIST_REQUEST_TIMEOUT_MS },
+        );
+      } catch (err) {
+        if (isTimeoutError(err)) {
+          throw new Error(t("Custom settings list timed out"));
+        }
+        throw err;
+      }
       expectedCount = response.status?.affectedCount;
       if (expectedCount === 0) {
         completeList();
