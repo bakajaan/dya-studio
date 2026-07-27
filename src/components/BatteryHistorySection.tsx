@@ -27,6 +27,16 @@
  *   直後に BLE 切断・再接続。ファームウェアは無罪。
  * 対策は2つ。(1) この画面の RPC も必ずキューを通す。(2) 自動取得は
  * 「転送が本当に空いてから」に遅延させる（下の useEffect）。
+ *
+ * 【2026-07-27 追記 / 推定残り時間がペリフェラル側で出なかった件】
+ * ファームの timestamp は uint16 の「起動からの秒数」で、再起動や約18.2時間の
+ * 桁溢れで 0 に戻る。以前はここで「隣り合う点の差」をそのまま消費量として
+ * 積算していたため、境界をまたいだペアが混じると値が壊れ、結果として
+ * 消費ヘースが 0 → 推定残り時間が非表示、という状態になっていた。
+ * スリープ/再起動の多いペリフェラル側で特に起きやすい。
+ * → 時刻の復元は batteryHistoryStore.toAbsoluteTimestamps()（セッション分割）、
+ *   消費ヘースは estimateBatteryDrain()（境界をまたぐペアを除外し、直近の
+ *   充電より後の下降ペアだけを平均）に集約した。
  */
 import {
   useCallback,
@@ -49,11 +59,13 @@ import { enqueueRpc, rpcQueueDepth } from "../lib/rpcQueue";
 import { hasKeymapLoadListeners } from "../lib/keymapLoadCoordinator";
 import {
   clearBatteryHistory,
+  estimateBatteryDrain,
   loadBatteryHistory,
   mergePoints,
   saveBatteryHistory,
   toAbsoluteTimestamps,
   MIN_EPOCH_SECONDS,
+  type BatteryDrainReason,
   type BatteryPoint,
 } from "../lib/batteryHistoryStore";
 import {
@@ -152,7 +164,7 @@ export function BatteryHistorySection() {
     (sourceId: number): string =>
       sourceId === 0
         ? tr("Central", "セントラル側")
-        : tr(`Peripheral ${sourceId}`, `ヘリフェラル側 ${sourceId}`),
+        : tr(`Peripheral ${sourceId}`, `ペリフェラル側 ${sourceId}`),
     [tr],
   );
 
@@ -395,8 +407,8 @@ export function BatteryHistorySection() {
     ? selectedSource
     : (availableSources[0] ?? 0);
 
-  // 蓄積分＋受信中の分をマージして表示。受信中の分はその時点の最大値を
-  // 基準に絶対時刻へ換算する（ファームが起動相対秒を返す場合の暗黙値）。
+  // 蓄積分＋受信中の分をマージして表示。受信中の分はセッション（再起動や
+  // uint16 桁溢れの切れ目）ごとに絶対時刻へ換算する。
   const allPoints = useMemo(() => {
     const stored = storedBySource[activeSource] ?? [];
     const live = liveBySource[activeSource] ?? [];
@@ -437,43 +449,34 @@ export function BatteryHistorySection() {
     return { minT, maxT, segments };
   }, [points]);
 
+  // 消費ヘースと推定残り時間は共通ロジックに集約（セントラル/ペリフェラル
+  // どちらでも同じ扱いになるようにするため）。
+  const drain = useMemo(() => estimateBatteryDrain(points), [points]);
+
+  const drainReasonText = useCallback(
+    (reason: BatteryDrainReason): string => {
+      switch (reason) {
+        case "charging":
+          return tr("charging now", "充電中のため未算出");
+        case "no-decline":
+          return tr("no discharge recorded yet", "残量が下がった記録がまだありません");
+        default:
+          return tr("not enough samples yet", "サンプルが足りません");
+      }
+    },
+    [tr],
+  );
+
   const stats = useMemo(() => {
     if (points.length < 2) return null;
     const levels = points.map((point) => point.batteryLevel);
-    const minLevel = Math.min(...levels);
-    const maxLevel = Math.max(...levels);
     const first = points[0];
     const last = points[points.length - 1];
-
-    // 上昇に転じた回数（おおよその充電回数）と、直近の連続した下降区間から
-    // 消費ヘースを求める。全体の差分で計算すると充電を含んで意味がなくなる。
-    let chargeSessions = 0;
-    let wasCharging = false;
-    let dischargeSeconds = 0;
-    let dischargeDrop = 0;
-    for (let index = 1; index < points.length; index += 1) {
-      const previous = points[index - 1];
-      const current = points[index];
-      const isCharging = current.batteryLevel > previous.batteryLevel;
-      if (isCharging && !wasCharging) chargeSessions += 1;
-      wasCharging = isCharging;
-      if (current.batteryLevel < previous.batteryLevel) {
-        dischargeSeconds += current.timestamp - previous.timestamp;
-        dischargeDrop += previous.batteryLevel - current.batteryLevel;
-      }
-    }
-    const drainRate =
-      dischargeSeconds > 0 ? dischargeDrop / (dischargeSeconds / 3600) : 0;
-    const remainingHours = drainRate > 0 ? last.batteryLevel / drainRate : null;
-    const spanHours = (last.timestamp - first.timestamp) / 3600;
     return {
-      minLevel,
-      maxLevel,
+      minLevel: Math.min(...levels),
+      maxLevel: Math.max(...levels),
       current: last.batteryLevel,
-      drainRate,
-      remainingHours,
-      chargeSessions,
-      spanHours,
+      spanHours: (last.timestamp - first.timestamp) / 3600,
       count: points.length,
     };
   }, [points]);
@@ -725,32 +728,48 @@ export function BatteryHistorySection() {
                 {tr("Max", "最大")}: {stats.maxLevel}%
               </span>
               <span>
-                {tr("Drain rate", "消費ヘース")}:{" "}
-                {stats.drainRate > 0 ? `${stats.drainRate.toFixed(2)}%/h` : "—"}
+                {tr("Drain rate", "消費ペース")}:{" "}
+                {drain.drainRatePerHour !== null &&
+                drain.drainRatePerHour > 0 ? (
+                  `${drain.drainRatePerHour.toFixed(2)}%/h`
+                ) : (
+                  <span className="text-[var(--color-text-muted)]">
+                    {drainReasonText(drain.reason)}
+                  </span>
+                )}
               </span>
               <span>
-                {tr("Charges", "充電回数")}: {stats.chargeSessions}
+                {tr("Charges", "充電回数")}: {drain.chargeSessions}
               </span>
               <span>
                 {tr("Samples", "サンプル数")}: {stats.count}
               </span>
-              {stats.remainingHours !== null && stats.remainingHours > 0 && (
+              {drain.remainingHours !== null && drain.remainingHours > 0 && (
                 <span>
                   {tr("Est. remaining", "推定残り")}:{" "}
                   <span className="text-[var(--color-neon)] font-medium">
-                    {stats.remainingHours > 24
+                    {drain.remainingHours > 24
                       ? tr(
-                          `${Math.round(stats.remainingHours / 24)}d`,
-                          `約${Math.round(stats.remainingHours / 24)}日`,
+                          `${Math.round(drain.remainingHours / 24)}d`,
+                          `約${Math.round(drain.remainingHours / 24)}日`,
                         )
                       : tr(
-                          `${Math.round(stats.remainingHours)}h`,
-                          `約${Math.round(stats.remainingHours)}時間`,
+                          `${Math.round(drain.remainingHours)}h`,
+                          `約${Math.round(drain.remainingHours)}時間`,
                         )}
                   </span>
                 </span>
               )}
             </div>
+          )}
+
+          {stats && drain.samplePairs > 0 && (
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              {tr(
+                `Estimate based on ${drain.samplePairs} discharge samples covering ${drain.sampleHours.toFixed(1)}h (pairs crossing a reboot or a timestamp wrap are ignored).`,
+                `推定は放電区間 ${drain.samplePairs} ペア・計 ${drain.sampleHours.toFixed(1)} 時間分に基づきます（再起動やタイムスタンプ桁溢れをまたぐ区間は除外）。`,
+              )}
+            </p>
           )}
 
           {lastFetched && (
