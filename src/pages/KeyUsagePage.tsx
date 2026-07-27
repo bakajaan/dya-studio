@@ -6,12 +6,15 @@
  * - このタブ: キーボードのフラッシュに残っている累積値。Studioを開いていない
  *   間の打鍵も含まれ、電源を切っても保持される。
  *
- * 読み出しはボタン押下時のみ行う (マウント即時に自動取得しない)。タブを開いた瞬間に
- * 大量のチャンク転送を始めると、他タブの自動取得と競合してBLEが詰まるため。
+ * 読み出しはボタン押下時のみ行う (マウント即時に自動取得しない)。読み出しは
+ * ページング方式 (1ページ12件のRPC応答) なので、タブを開いた瞬間に始めると
+ * 他タブの自動取得と競合してBLEが詰まるため。
  */
 import { useCallback, useContext, useMemo, useState } from "react";
 import {
+  IconCopy,
   IconDeviceFloppy,
+  IconDownload,
   IconFlame,
   IconRefresh,
   IconTrash,
@@ -26,9 +29,33 @@ import {
   createHidUsage,
   getKeycodeByCode,
 } from "../lib/keycodes";
+import type { KeyUsageExportInput } from "../lib/keyUsageExport";
+import {
+  buildKeyUsageCsv,
+  buildKeyUsageJson,
+  buildKeyUsageMarkdown,
+  copyTextToClipboard,
+  downloadTextFile,
+  keyUsageExportFilename,
+} from "../lib/keyUsageExport";
 
 const HEAT_UNIT = 48;
 const TOP_KEYCODE_COUNT = 20;
+
+/**
+ * キーマップのバインディングから表示名を推測する。
+ * useKeymap の型に依存しすぎないよう、実行時に安全にアクセスする。
+ */
+function bindingLabel(binding: unknown): string | undefined {
+  if (typeof binding !== "object" || binding === null) return undefined;
+  const record = binding as { param1?: unknown };
+  if (typeof record.param1 !== "number") return undefined;
+  const param1 = record.param1;
+  if (param1 === 0) return undefined;
+  const definition = getKeycodeByCode(param1);
+  if (definition) return definition.displayName;
+  return `0x${param1.toString(16).toUpperCase()}`;
+}
 
 export function KeyUsagePage() {
   const { language } = useLanguage();
@@ -42,6 +69,9 @@ export function KeyUsagePage() {
 
   // "all" = 全レイヤー合計。それ以外はレイヤー番号の文字列。
   const [layerFilter, setLayerFilter] = useState<string>("all");
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
 
   const activeLayout = useMemo(() => {
     const layouts = keymap.physicalLayouts;
@@ -124,6 +154,83 @@ export function KeyUsagePage() {
     if (definition) return definition.displayName;
     return `0x${keycode.toString(16).toUpperCase()}`;
   }, []);
+
+  const layerNames = useMemo(() => {
+    const layers = keymap.keymap?.layers ?? [];
+    return layers.map((layer, index) => layer?.name || `Layer ${index}`);
+  }, [keymap.keymap]);
+
+  const keyGeometry = useMemo(() => {
+    if (!activeLayout) return undefined;
+    return activeLayout.keys.map((key) => ({
+      x: key.x / 100,
+      y: key.y / 100,
+      width: key.width / 100,
+      height: key.height / 100,
+    }));
+  }, [activeLayout]);
+
+  const keyBindings = useMemo(() => {
+    const layers = (keymap.keymap?.layers ?? []) as unknown[];
+    return layers.map((layer) => {
+      const bindings = (layer as { bindings?: unknown }).bindings;
+      if (!Array.isArray(bindings)) return [] as (string | undefined)[];
+      return bindings.map((binding) => bindingLabel(binding));
+    });
+  }, [keymap.keymap]);
+
+  const buildExportInput = useCallback((): KeyUsageExportInput | null => {
+    const stats = keyUsage.stats;
+    if (!stats) return null;
+    return {
+      metadata: stats.metadata,
+      fetchedAt: stats.fetchedAt,
+      positions: stats.positions,
+      keycodes: stats.keycodes,
+      layerNames,
+      keyGeometry,
+      keyBindings,
+      keycodeLabel,
+    };
+  }, [keyUsage.stats, layerNames, keyGeometry, keyBindings, keycodeLabel]);
+
+  const handleDownloadJson = useCallback(() => {
+    const input = buildExportInput();
+    if (!input) return;
+    downloadTextFile(
+      keyUsageExportFilename("json", input.fetchedAt),
+      buildKeyUsageJson(input),
+      "application/json",
+    );
+  }, [buildExportInput]);
+
+  const handleDownloadCsv = useCallback(() => {
+    const input = buildExportInput();
+    if (!input) return;
+    downloadTextFile(
+      keyUsageExportFilename("csv", input.fetchedAt),
+      buildKeyUsageCsv(input),
+      "text/csv",
+    );
+  }, [buildExportInput]);
+
+  const handleDownloadMarkdown = useCallback(() => {
+    const input = buildExportInput();
+    if (!input) return;
+    downloadTextFile(
+      keyUsageExportFilename("md", input.fetchedAt),
+      buildKeyUsageMarkdown(input),
+      "text/markdown",
+    );
+  }, [buildExportInput]);
+
+  const handleCopyMarkdown = useCallback(async () => {
+    const input = buildExportInput();
+    if (!input) return;
+    const copied = await copyTextToClipboard(buildKeyUsageMarkdown(input));
+    setCopyState(copied ? "copied" : "failed");
+    window.setTimeout(() => setCopyState("idle"), 2500);
+  }, [buildExportInput]);
 
   const handleClear = useCallback(() => {
     const confirmed = window.confirm(
@@ -257,6 +364,70 @@ export function KeyUsagePage() {
                 </p>
               )}
             </section>
+
+            {keyUsage.stats && (
+              <section className="glass-card p-4">
+                <h2 className="text-sm font-medium text-[var(--color-text)] mb-2">
+                  {tr("Export for analysis", "分析用にデータ出力")}
+                </h2>
+                <p className="text-xs text-[var(--color-text-muted)] mb-3">
+                  {tr(
+                    "Export the counters together with the layer names, key positions and the keys currently assigned there. Paste the AI text into ChatGPT / Claude and ask it to review your keymap, or open the CSV in a spreadsheet.",
+                    "レイヤー名・キー位置・そこに割り当てられているキーを含めて書き出します。「AI用テキスト」をChatGPTやClaudeに貼り付ければキーマップの分析を頼めます。CSVは表計算ソフトで開けます。",
+                  )}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    className="btn-electric text-sm flex items-center gap-1.5"
+                    onClick={() => void handleCopyMarkdown()}
+                  >
+                    <IconCopy size={16} />
+                    {copyState === "copied"
+                      ? tr("Copied", "コピーしました")
+                      : copyState === "failed"
+                        ? tr("Copy failed", "コピーに失敗")
+                        : tr("Copy AI text", "AI用テキストをコピー")}
+                  </button>
+                  <button
+                    className="btn-ghost text-sm flex items-center gap-1.5"
+                    onClick={handleDownloadMarkdown}
+                  >
+                    <IconDownload size={16} />
+                    {tr("Markdown (.md)", "Markdown (.md)")}
+                  </button>
+                  <button
+                    className="btn-ghost text-sm flex items-center gap-1.5"
+                    onClick={handleDownloadJson}
+                  >
+                    <IconDownload size={16} />
+                    {tr("JSON (.json)", "JSON (.json)")}
+                  </button>
+                  <button
+                    className="btn-ghost text-sm flex items-center gap-1.5"
+                    onClick={handleDownloadCsv}
+                  >
+                    <IconDownload size={16} />
+                    {tr("CSV (.csv)", "CSV (.csv)")}
+                  </button>
+                </div>
+                {copyState === "failed" && (
+                  <p className="text-xs text-red-400 mt-2">
+                    {tr(
+                      "The browser blocked clipboard access. Use the Markdown download instead.",
+                      "ブラウザにクリップボードへのアクセスを拒否されました。代わりにMarkdownのダウンロードをお使いください。",
+                    )}
+                  </p>
+                )}
+                {keyBindings.length === 0 && (
+                  <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                    {tr(
+                      "Open the Keymap tab once so the assigned keys can be included in the export.",
+                      "キーマップタブを一度開くと、各キーに割り当てられているキーも一緒に書き出せます。",
+                    )}
+                  </p>
+                )}
+              </section>
+            )}
 
             {keyUsage.stats && (
               <section className="glass-card p-4">
