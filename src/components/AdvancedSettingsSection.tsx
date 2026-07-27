@@ -169,12 +169,15 @@ function fieldName(key: string): string {
 // Settings outside the PMW3610 groups previously showed only their raw key,
 // which made it hard to tell what each item does. A description is resolved
 // for every row and shown under the setting name, in this order:
-//   1. Known field names shared across firmware modules
+//   1. Per-subsystem field names, because the same field name means different
+//      things in different modules (SUBSYSTEM_FIELD_DESCRIPTIONS)
+//   2. Known field names shared across firmware modules
 //      (KNOWN_FIELD_DESCRIPTIONS)
-//   2. Keyspace prefixes such as "macro/" (KEYSPACE_PREFIX_DESCRIPTIONS)
-//   3. A fallback derived from the setting's value type and constraints
-//      (describeSettingByShape), so even unknown module settings at least
-//      explain what kind of value they take.
+//   3. Keyspace prefixes such as "macro/" (KEYSPACE_PREFIX_DESCRIPTIONS)
+//   4. A fallback derived from the setting's value type, unit suffix and
+//      constraints (describeSettingByShape), so even unknown module settings
+//      say what KIND of number/value they take (milliseconds, percent,
+//      index, ...) rather than just "numeric value".
 // Texts are kept bilingual here (instead of the i18n dictionary) so adding a
 // new entry stays a single-object change.
 // ---------------------------------------------------------------------------
@@ -188,6 +191,13 @@ function pickText(text: BilingualText, language: string): string {
   return language === "ja" ? text.ja : text.en;
 }
 
+// Custom subsystem identifiers whose settings get tailored descriptions.
+const RUNTIME_COMBO_IDENTIFIER = "cormoran__runtime_combo";
+const RUNTIME_MACRO_IDENTIFIER = "cormoran__runtime_macro";
+const RUNTIME_INPUT_PROCESSOR_IDENTIFIER = "cormoran__runtime_input_processor";
+const DEFAULT_LAYER_IDENTIFIER = "cormoran__default_layer";
+const OS_DETECTION_IDENTIFIER = "cormoran__os_detection";
+
 const SECTION_DESCRIPTIONS: Record<string, BilingualText> = {
   cormoran_custom_settings: {
     en: "General storage shared by firmware modules for their settings and runtime data (runtime macros, combos, OS profiles, ...).",
@@ -196,6 +206,73 @@ const SECTION_DESCRIPTIONS: Record<string, BilingualText> = {
   [PMW3610_CUSTOM_SETTINGS_IDENTIFIER]: {
     en: "Settings for the PMW3610 trackball sensor driver.",
     ja: "PMW3610トラックボールセンサードライバの設定です。",
+  },
+  [RUNTIME_COMBO_IDENTIFIER]: {
+    en: "Timing defaults for combos (pressing several keys at once to send a different key).",
+    ja: "コンボ（複数キーの同時押しで別のキーを送る機能）の既定タイミング設定です。",
+  },
+  [RUNTIME_MACRO_IDENTIFIER]: {
+    en: "Timing defaults used when a macro plays back its key presses.",
+    ja: "マクロがキー入力を再生するときのタイミング既定値です。",
+  },
+  [RUNTIME_INPUT_PROCESSOR_IDENTIFIER]: {
+    en: "Settings for input processors, which transform pointer/scroll input before it reaches the host.",
+    ja: "入力プロセッサ（ポインタやスクロールの入力をホストに送る前に加工する仕組み）の設定です。",
+  },
+  [DEFAULT_LAYER_IDENTIFIER]: {
+    en: "Which keymap layer is used as the base layer, optionally per connection / OS.",
+    ja: "どのキーマップレイヤーを基本レイヤーとして使うか（接続先やOSごとの指定を含む）の設定です。",
+  },
+  [OS_DETECTION_IDENTIFIER]: {
+    en: "Detection and manual override of the operating system the keyboard is connected to.",
+    ja: "接続先OSの自動判定と手動上書きに関する設定です。",
+  },
+};
+
+// Field descriptions that only make sense in the context of one subsystem
+// (e.g. "timeout_ms" is the combo press window here, but something else in
+// another module).
+const SUBSYSTEM_FIELD_DESCRIPTIONS: Record<
+  string,
+  Record<string, BilingualText>
+> = {
+  [RUNTIME_COMBO_IDENTIFIER]: {
+    timeout_ms: {
+      en: "How long after the first key the remaining combo keys must be pressed for the combo to trigger. Shorter values reduce accidental combos; longer values make combos easier to hit.",
+      ja: "コンボが成立する同時押しの判定時間です。最初のキーを押してからこの時間内に残りのキーを押すとコンボになります。短くすると誤発動が減り、長くすると成立しやすくなります。",
+    },
+    require_prior_idle_ms: {
+      en: "Ignore the combo unless the keyboard was idle for at least this long before the first key. Prevents combos from firing mid-typing. 0 disables the check.",
+      ja: "直前の打鍵からこの時間以上キーボードが空いていないとコンボを成立させません。速く打鍵している最中の誤発動を防ぎます。0で無効になります。",
+    },
+    slow_release: {
+      en: "When enabled, the combo stays held until every combo key is released. When disabled, it releases as soon as the first key is released.",
+      ja: "有効にすると、コンボのキーをすべて離すまでコンボを押したままの状態に保ちます。無効なら最初の1キーを離した時点で解除されます。",
+    },
+    key_positions: {
+      en: "Key positions (keymap key numbers) that make up this combo.",
+      ja: "このコンボを構成するキーの位置（キーマップ上のキー番号）です。",
+    },
+    layers: {
+      en: "Layers on which this combo is active.",
+      ja: "このコンボが有効になるレイヤーです。",
+    },
+  },
+  [RUNTIME_MACRO_IDENTIFIER]: {
+    tap_ms: {
+      en: "How long each key in a macro is held down before being released during playback. Increase it if the host drops keystrokes from fast macros.",
+      ja: "マクロ再生時に各キーを押してから離すまでの時間です。マクロが速すぎてホストが取りこぼす場合は長くします。",
+    },
+    wait_ms: {
+      en: "Pause inserted between the steps of a macro during playback.",
+      ja: "マクロ再生時に各ステップの間に入れる待ち時間です。",
+    },
+  },
+  [DEFAULT_LAYER_IDENTIFIER]: {
+    default_layer: {
+      en: "Keymap layer used as the base layer when no other layer is activated.",
+      ja: "他のレイヤーが有効になっていないときに使う基本レイヤーです。",
+    },
   },
 };
 
@@ -236,6 +313,34 @@ const KNOWN_FIELD_DESCRIPTIONS: Record<string, BilingualText> = {
     en: "Operating system detected for this connection.",
     ja: "この接続先で検出されたOSです。",
   },
+  tapping_term_ms: {
+    en: "How long a key must be held before it counts as a hold instead of a tap.",
+    ja: "キーを押し続けたときに「タップ」ではなく「ホールド」と判定されるまでの時間です。",
+  },
+  quick_tap_ms: {
+    en: "If the same key is tapped again within this time, it repeats the tap instead of holding.",
+    ja: "同じキーをこの時間内に再度押すと、ホールドではなくタップの連打として扱われます。",
+  },
+  timeout_ms: {
+    en: "Time limit this feature waits before giving up or resetting.",
+    ja: "この機能が判定を打ち切る、またはリセットするまでの待ち時間です。",
+  },
+  tap_ms: {
+    en: "How long each key press is held down before being released.",
+    ja: "キーを押してから離すまでの保持時間です。",
+  },
+  wait_ms: {
+    en: "Pause inserted between consecutive steps.",
+    ja: "連続する処理の間に入れる待ち時間です。",
+  },
+  require_prior_idle_ms: {
+    en: "The keyboard must have been idle for at least this long beforehand, otherwise the feature is skipped. 0 disables the check.",
+    ja: "直前にこの時間以上キーボードが空いていなければ、この機能は動作しません。0で無効になります。",
+  },
+  slow_release: {
+    en: "Hold the output until every involved key is released, instead of releasing on the first one.",
+    ja: "関係するキーをすべて離すまで出力を保持します（最初の1キーで解除しません）。",
+  },
 };
 
 const KEYSPACE_PREFIX_DESCRIPTIONS: Array<{
@@ -258,11 +363,88 @@ const KEYSPACE_PREFIX_DESCRIPTIONS: Array<{
   },
 ];
 
+// Unit hints derived from the field-name suffix. Used when no explicit
+// description exists, so a numeric row explains WHAT the number is (a
+// duration, a percentage, an index, ...) instead of only "numeric value".
+const NUMERIC_UNIT_HINTS: Array<{ match: RegExp; text: BilingualText }> = [
+  {
+    match: /_ms$/,
+    text: {
+      en: "A length of time in milliseconds (1000 ms = 1 second)",
+      ja: "時間をミリ秒で指定します（1000ミリ秒 = 1秒）",
+    },
+  },
+  {
+    match: /_us$/,
+    text: {
+      en: "A length of time in microseconds",
+      ja: "時間をマイクロ秒で指定します",
+    },
+  },
+  {
+    match: /_(sec|secs|seconds)$/,
+    text: {
+      en: "A length of time in seconds",
+      ja: "時間を秒で指定します",
+    },
+  },
+  {
+    match: /_(minutes|mins)$/,
+    text: {
+      en: "A length of time in minutes",
+      ja: "時間を分で指定します",
+    },
+  },
+  {
+    match: /_(hz|frequency)$/,
+    text: {
+      en: "A frequency in hertz (times per second)",
+      ja: "周波数（1秒あたりの回数）を指定します",
+    },
+  },
+  {
+    match: /_(pct|percent|percentage)$/,
+    text: {
+      en: "A percentage",
+      ja: "割合をパーセントで指定します",
+    },
+  },
+  {
+    match: /_(count|num|len|length|size|bytes|slots)$/,
+    text: {
+      en: "A number of items",
+      ja: "個数や大きさを指定します",
+    },
+  },
+  {
+    match: /_(index|idx|slot|id)$/,
+    text: {
+      en: "A zero-based number identifying which item is used",
+      ja: "どの項目を使うかを表す番号です（0から始まります）",
+    },
+  },
+  {
+    match: /^(cpi|dpi)$/,
+    text: {
+      en: "A resolution in counts per inch; higher moves the cursor further for the same motion",
+      ja: "解像度（1インチあたりのカウント数）です。大きいほど同じ動きでカーソルが速く動きます",
+    },
+  },
+  {
+    match: /_(divisor|multiplier|scale|factor)$/,
+    text: {
+      en: "A scaling factor applied to the raw value",
+      ja: "元の値に掛ける倍率（スケール）です",
+    },
+  },
+];
+
 // Fallback used when a setting has no known field/keyspace description:
-// derive a short explanation from its constraints and value type so the user
-// can at least tell what kind of value the item takes.
+// derive a short explanation from its name, constraints and value type so the
+// user can at least tell what kind of value the item takes.
 function describeSettingByShape(setting: Setting, language: string): string {
   const ja = language === "ja";
+  const field = fieldName(setting.key);
   if (hasLayerConstraint(setting)) {
     return ja
       ? "キーマップのレイヤーを選択する設定です。"
@@ -281,18 +463,33 @@ function describeSettingByShape(setting: Setting, language: string): string {
   const range = rangeConstraint(setting);
   switch (valueKind(setting)) {
     case "bool":
-      return ja
-        ? "オン/オフを切り替える設定です。"
-        : "On/off toggle.";
+      if (/(_enabled?|^enable(d)?$)/.test(field)) {
+        return ja
+          ? "この機能を使うかどうかを切り替えます。"
+          : "Turns this feature on or off.";
+      }
+      if (/^(invert|swap)/.test(field) || /_(invert|inverted)$/.test(field)) {
+        return ja
+          ? "方向や軸の入れ替えを切り替えます。"
+          : "Flips the direction / axis mapping.";
+      }
+      return ja ? "オン/オフを切り替える設定です。" : "On/off toggle.";
     case "int32": {
       const min = range?.min?.int32Value;
       const max = range?.max?.int32Value;
-      if (min !== undefined || max !== undefined) {
-        return ja
-          ? `数値の設定です（範囲: ${min ?? "?"}〜${max ?? "?"}）。`
-          : `Numeric value (range: ${min ?? "?"}–${max ?? "?"}).`;
+      const rangeText =
+        min !== undefined || max !== undefined
+          ? ja
+            ? `（範囲: ${min ?? "?"}〜${max ?? "?"}）`
+            : ` (range: ${min ?? "?"}–${max ?? "?"})`
+          : "";
+      const unit = NUMERIC_UNIT_HINTS.find((hint) => hint.match.test(field));
+      if (unit) {
+        return `${pickText(unit.text, language)}${rangeText}${ja ? "。" : "."}`;
       }
-      return ja ? "数値の設定です。" : "Numeric value.";
+      return ja
+        ? `数値の設定です${rangeText}。意味は提供元モジュールのドキュメントを参照してください。`
+        : `A numeric value${rangeText}. See the providing module's documentation for what it controls.`;
     }
     case "string":
       return ja ? "文字列の設定です。" : "Text value.";
@@ -302,8 +499,8 @@ function describeSettingByShape(setting: Setting, language: string): string {
         : "Raw binary value; see the providing module's documentation for its format.";
     case "behavior":
       return ja
-        ? "ビヘイビア割り当て（ビヘイビア + param1/param2）の設定です。"
-        : "Behavior binding (behavior + param1/param2).";
+        ? "押したときに実行する動作（ビヘイビア）とそのパラメータ（param1/param2）を指定します。"
+        : "The behavior run when triggered, plus its parameters (param1/param2).";
     default:
       return ja
         ? "このモジュール固有の設定です。詳細は提供元モジュールのドキュメントを参照してください。"
@@ -314,8 +511,14 @@ function describeSettingByShape(setting: Setting, language: string): string {
 function resolveSettingDescription(
   setting: Setting,
   language: string,
+  sectionIdentifier?: string,
 ): string {
-  const known = KNOWN_FIELD_DESCRIPTIONS[fieldName(setting.key)];
+  const field = fieldName(setting.key);
+  const perSubsystem = sectionIdentifier
+    ? SUBSYSTEM_FIELD_DESCRIPTIONS[sectionIdentifier]?.[field]
+    : undefined;
+  if (perSubsystem) return pickText(perSubsystem, language);
+  const known = KNOWN_FIELD_DESCRIPTIONS[field];
   if (known) return pickText(known, language);
   const keyspace = KEYSPACE_PREFIX_DESCRIPTIONS.find((entry) =>
     setting.key.startsWith(entry.prefix),
@@ -1370,7 +1573,11 @@ export function CustomSettingsSectionCard({
                     return description ? t(description) : undefined;
                   }}
                   describeSetting={(setting) =>
-                    resolveSettingDescription(setting, language)
+                    resolveSettingDescription(
+                      setting,
+                      language,
+                      section.identifier,
+                    )
                   }
                 />
               </div>
@@ -1385,7 +1592,11 @@ export function CustomSettingsSectionCard({
                 behaviors={behaviors}
                 customSettings={customSettings}
                 describeSetting={(setting) =>
-                  resolveSettingDescription(setting, language)
+                  resolveSettingDescription(
+                    setting,
+                    language,
+                    section.identifier,
+                  )
                 }
               />
             </div>
