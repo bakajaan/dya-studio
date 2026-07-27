@@ -21,6 +21,7 @@ import {
   IconInfoCircle,
   IconPencil,
   IconLock,
+  IconChartBar,
 } from "@tabler/icons-react";
 import { useStudioLockState } from "@cormoran/zmk-studio-react-hook";
 import * as Tooltip from "@radix-ui/react-tooltip";
@@ -30,6 +31,7 @@ import { ConnectionContext } from "../components/DeviceConnection";
 import { KeyboardLayoutContext } from "../contexts/KeyboardLayoutContext";
 import { KeyboardLayout } from "../components/KeyboardLayout";
 import { KeycodeSelector } from "../components/KeycodeSelector";
+import { KeymapInsightsPanel } from "../components/KeymapInsightsPanel";
 import { KeymapProfilePanel } from "../components/KeymapProfilePanel";
 import { SensorRotationConfig } from "../components/SensorRotationConfig";
 import { LoadingIndicator } from "../components/LoadingIndicator";
@@ -43,8 +45,16 @@ import type { BehaviorBinding } from "../hooks/useKeymap";
 import { useStudioUnlock } from "../hooks/useStudioUnlock";
 import { useLanguage } from "../hooks/useLanguage";
 
+// Persists whether the Keymap tab's insights (heatmap / key usage) sidebar is
+// expanded, so the choice survives a reload.
+const INSIGHTS_PANEL_STORAGE_KEY = "dya-studio-keymap-insights-panel-visible";
+
 export function KeymapPage() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const tr = useCallback(
+    (en: string, ja: string) => (language === "ja" ? ja : en),
+    [language],
+  );
   const connection = useContext(ConnectionContext);
   const keyboardLayoutContext = useContext(KeyboardLayoutContext);
   const keymap = useKeymap();
@@ -84,6 +94,11 @@ export function KeymapPage() {
   // Guards the deferred macro load so it fires once per keymap load; reset when
   // a new load starts (see the effect below).
   const macrosRequestedRef = useRef(false);
+  // Shows the heatmap / key usage sidebar next to the keyboard layout, so the
+  // user can watch live/device key usage stats while editing the keymap.
+  const [showInsightsPanel, setShowInsightsPanel] = useState(
+    () => window.localStorage.getItem(INSIGHTS_PANEL_STORAGE_KEY) === "1",
+  );
 
   // Get current layer
   const currentLayer = useMemo(() => {
@@ -346,6 +361,14 @@ export function KeymapPage() {
     setSelectedLayerIndex(inputStream.activeLayerIndex);
   }, [inputStream.activeLayerIndex, keymap.keymap?.layers]);
 
+  // Persist the insights sidebar's shown/hidden state across reloads.
+  useEffect(() => {
+    window.localStorage.setItem(
+      INSIGHTS_PANEL_STORAGE_KEY,
+      showInsightsPanel ? "1" : "0",
+    );
+  }, [showInsightsPanel]);
+
   // Load the runtime-macro list as the FINAL step of the keymap tab load: only
   // after the keymap has fully loaded (preview + background behaviors/layers) so
   // the macro RPCs (list_macros / get_macro_global_settings) run last instead of
@@ -413,6 +436,25 @@ export function KeymapPage() {
                   </Switch.Root>
                 </div>
               )}
+              {/* Insights sidebar toggle: heatmap / key usage next to the
+                  keyboard layout, so the user can watch stats while editing. */}
+              <button
+                type="button"
+                onClick={() => setShowInsightsPanel((visible) => !visible)}
+                aria-pressed={showInsightsPanel}
+                title={tr(
+                  "Show or hide the heatmap and key usage panel",
+                  "ヒートマップと打鍵統計パネルの表示/非表示を切り替え",
+                )}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium flex-shrink-0 border transition-colors ${
+                  showInsightsPanel
+                    ? "border-[var(--color-electric)]/40 bg-[var(--color-electric)]/10 text-[var(--color-electric)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-border)]"
+                }`}
+              >
+                <IconChartBar size={16} />
+                {tr("Insights", "インサイト")}
+              </button>
               {/* Keymap profiles: save/export/import/apply. */}
               <KeymapProfilePanel keymap={keymap} />
               {/* When Studio is locked, editing is disabled — show a lock badge
@@ -546,7 +588,14 @@ export function KeymapPage() {
 
         {/* Main Content */}
         {connection.isConnected && keymap.keymap && currentLayout && (
-          <>
+          <div
+            className={
+              showInsightsPanel
+                ? "xl:grid xl:grid-cols-[minmax(0,1fr)_22rem] xl:gap-6 xl:items-start"
+                : undefined
+            }
+          >
+          <div>
             {/* Layer Tabs */}
             <div className="flex flex-wrap items-center gap-2 mb-6">
               <div className="flex gap-2 flex-1 overflow-x-auto pb-2 basis-full sm:basis-auto">
@@ -986,7 +1035,25 @@ export function KeymapPage() {
                 />
               </div>
             )}
-          </>
+          </div>
+          {showInsightsPanel && (
+            <div className="mt-6 xl:mt-0 xl:sticky xl:top-6">
+              <KeymapInsightsPanel
+                activeLayout={currentLayout}
+                layers={keymap.keymap.layers}
+                layersForSelector={layersForSelector}
+                behaviors={keymap.behaviors}
+                keyboardLayout={keyboardLayoutContext.layout}
+                runtimeMacros={runtimeMacro.macros}
+                highlightedKeys={inputStream.highlightedKeys}
+                activeLayerIndex={inputStream.activeLayerIndex}
+                isStreamEnabled={inputStream.isEnabled}
+                t={t}
+                tr={tr}
+              />
+            </div>
+          )}
+          </div>
         )}
         {/* Info */}
         <div className="mt-8 p-4 rounded-lg bg-[var(--color-border)] border border-[var(--color-border-hover)]">
