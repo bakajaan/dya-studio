@@ -14,17 +14,42 @@
  * onto the CURRENT (possibly unsaved) keymap bindings, so editing a key
  * immediately previews an estimated heatmap for the new arrangement.
  *
- * This is inherently an approximation: behaviors like mod-tap/layer-tap only
- * have their tap keycode considered (matching the same param1 heuristic used
- * for the "Top keys" labeling elsewhere), and "all layers combined" sums each
- * layer's contribution per physical position, which assumes overall layer
- * usage stays roughly similar to before.
+ * Figuring out "which keycode would this binding send" requires knowing the
+ * BEHAVIOR, not just blindly reading param1: most behaviors don't carry a
+ * keycode at all (layer switches, macros, mouse buttons, ...), and some
+ * (mod-tap, layer-tap) carry the keycode in param2, not param1 — param1 there
+ * is a modifier / layer number, which happens to collide numerically with
+ * unrelated keyboard usage codes (e.g. a mouse "Middle Click" value can equal
+ * a letter's HID code), causing bogus matches if read blindly. This module
+ * uses the SAME behavior metadata registry (see behaviorMetadata.ts) that the
+ * rest of the app already relies on to render binding labels, so the two stay
+ * in sync automatically as behaviors are added there.
+ *
+ * This is inherently an approximation:
+ * - Mod-tap / layer-tap only contribute their TAP keycode (param2) — the
+ *   hold-side modifier/layer isn't counted, since it's not a "typed key".
+ * - Non-keycode behaviors (mouse buttons, macros, layer switches, BT/output
+ *   commands, ...) are skipped entirely; their historical counts (if any)
+ *   don't carry over to the prediction.
+ * - "All layers combined" sums each layer's contribution per physical
+ *   position, which assumes overall layer usage stays roughly similar to
+ *   before.
  */
-import type { BehaviorBinding, Layer } from "../hooks/useKeymap";
+import type { BehaviorBinding, BehaviorDefinition, Layer } from "../hooks/useKeymap";
 import type { KeyUsageKeycodeStat } from "../hooks/useKeyUsage";
-import { HID_USAGE_PAGE_KEYBOARD, createHidUsage } from "./keycodes";
+import { getBehaviorMetadata } from "./behaviorMetadata";
+import {
+  HID_USAGE_PAGE_KEYBOARD,
+  createHidUsage,
+  dropModifierFlags,
+  getHidUsageCode,
+  getHidUsagePage,
+} from "./keycodes";
 
-/** Same numeric space as BehaviorBinding.param1 for simple key-press behaviors. */
+/** Same numeric space as the device's per-keycode stats: bare keyboard-page
+ * codes are kept as-is (matching how the firmware reports them), anything on
+ * another HID usage page (consumer, ...) is merged into a single page+code
+ * value so it can be used as a Map key alongside keyboard-page codes. */
 export function normalizeDeviceKeycode(
   usagePage: number,
   keycode: number,
@@ -48,18 +73,42 @@ export function buildKeycodeUsageMap(
 }
 
 /**
- * Best-effort extraction of the keycode a binding would send, so it can be
- * matched against the device's per-keycode history. Returns undefined for
- * behaviors we can't confidently map (mirrors the heuristic already used to
- * label "Top keys" elsewhere: only param1 when it's set).
+ * Extracts the keycode a binding would actually SEND, using the same
+ * behavior metadata registry the rest of the app uses to label bindings (see
+ * behaviorMetadata.ts), so this stays correct as behaviors are added there:
+ * - Behaviors whose param2 is a keycode (mod-tap, layer-tap) use param2 —
+ *   that's the TAP keycode, i.e. what typing that key actually sends.
+ * - Behaviors whose param1 is a keycode (key press, key toggle, sticky key,
+ *   ...) use param1.
+ * - Everything else (layer switches, macros, mouse buttons, BT/output
+ *   commands, ...) returns undefined: there is no single keycode to
+ *   attribute historical presses to.
+ * The returned value is normalized into the SAME numeric space as
+ * `normalizeDeviceKeycode`, so it can be looked up directly in a map built by
+ * `buildKeycodeUsageMap`.
  */
 export function bindingUsageKeycode(
   binding: BehaviorBinding | undefined,
+  behaviors: Map<number, BehaviorDefinition>,
 ): number | undefined {
   if (!binding) return undefined;
-  const param1 = (binding as { param1?: unknown }).param1;
-  if (typeof param1 !== "number" || param1 === 0) return undefined;
-  return param1;
+  const behavior = behaviors.get(binding.behaviorId);
+  if (!behavior) return undefined;
+  const metadata = getBehaviorMetadata(behavior.displayName);
+  if (!metadata) return undefined;
+
+  const rawHidUsage =
+    metadata.param2Type === "keycode"
+      ? binding.param2
+      : metadata.param1Type === "keycode"
+        ? binding.param1
+        : undefined;
+  if (rawHidUsage === undefined || rawHidUsage === 0) return undefined;
+
+  const withoutModifiers = dropModifierFlags(rawHidUsage);
+  const usagePage = getHidUsagePage(withoutModifiers);
+  const keycode = getHidUsageCode(withoutModifiers);
+  return normalizeDeviceKeycode(usagePage, keycode);
 }
 
 /** "all" = every layer's contribution summed per position. A number = only
@@ -72,6 +121,7 @@ export type PredictionScope = "all" | number;
  */
 export function computePredictedCountsByPosition(
   layers: readonly Layer[],
+  behaviors: Map<number, BehaviorDefinition>,
   usageMap: Map<number, number>,
   scope: PredictionScope,
 ): Map<number, number> {
@@ -80,7 +130,7 @@ export function computePredictedCountsByPosition(
     scope === "all" ? layers : layers[scope] ? [layers[scope]] : [];
   for (const layer of targetLayers) {
     layer.bindings.forEach((binding, position) => {
-      const keycode = bindingUsageKeycode(binding);
+      const keycode = bindingUsageKeycode(binding, behaviors);
       if (keycode === undefined) return;
       const historical = usageMap.get(keycode) ?? 0;
       if (historical === 0) return;
