@@ -2,7 +2,6 @@ import { useContext, useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   IconChartBar,
-  IconFlame,
   IconHome,
   IconKeyboard,
   IconPlugConnected,
@@ -33,7 +32,6 @@ import { KeymapPage } from "./pages/KeymapPage";
 import { TrackballPage } from "./pages/TrackballPage";
 import { MacroComboPage } from "./pages/MacroComboPage";
 import { InsightsPage } from "./pages/InsightsPage";
-import { KeyUsagePage } from "./pages/KeyUsagePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { CustomSubsystemsPage } from "./pages/CustomSubsystemsPage";
 import { TroubleshootingPage } from "./pages/TroubleshootingPage";
@@ -75,14 +73,8 @@ function getTabs(t: (key: string) => string): TabItem[] {
       icon: <IconChartBar size={18} />,
       content: <InsightsPage />,
     },
-    // 打鍵統計はキーボード側のフラッシュに保存された累積値を読むタブ。
-    // Insights（このブラウザでの計測）とは別データなので独立したタブにしている。
-    {
-      id: "key-usage",
-      label: t("Key Usage"),
-      icon: <IconFlame size={18} />,
-      content: <KeyUsagePage />,
-    },
+    // 打鍵統計（旧「Key Usage」タブ）は Keymap タブの Insights パネルに統合済み。
+    // デバイス側の累積カウンタもキーマップを編集しながら同じ場所で見られる。
     {
       id: "connection",
       label: t("Connection"),
