@@ -269,10 +269,11 @@ export function KeymapInsightsPanel({
     () =>
       computePredictedCountsByPosition(
         layers,
+        behaviors,
         keycodeUsageMap,
         predictionScopeValue,
       ),
-    [layers, keycodeUsageMap, predictionScopeValue],
+    [layers, behaviors, keycodeUsageMap, predictionScopeValue],
   );
   const predictedMaxCount = useMemo(
     () => maxOfCounts(predictedCountsByPosition),
