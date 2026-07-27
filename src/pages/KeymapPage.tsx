@@ -397,7 +397,7 @@ export function KeymapPage() {
 
   return (
     <div className="p-6 h-full overflow-auto">
-      <div className="max-w-6xl mx-auto">
+      <div className="max-w-6xl 2xl:max-w-[1700px] mx-auto">
         {/* Header */}
         <div className="flex flex-col tablet:flex-row tablet:items-center gap-3 mb-4">
           <div className="flex items-center gap-3 mb-4">
@@ -591,7 +591,7 @@ export function KeymapPage() {
           <div
             className={
               showInsightsPanel
-                ? "xl:grid xl:grid-cols-[minmax(0,1fr)_22rem] xl:gap-6 xl:items-start"
+                ? "xl:grid xl:grid-cols-[minmax(0,1fr)_22rem] xl:gap-6 xl:items-start 2xl:grid-cols-[minmax(0,1fr)_26rem] 2xl:gap-8"
                 : undefined
             }
           >
