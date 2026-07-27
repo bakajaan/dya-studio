@@ -15,6 +15,8 @@
  *   かけてRPCを打ち切ってはいけない。応答ストリームが崩れて
  *   "GATT Server is disconnected" の連鎖に化ける。
  *   通知の待ち合わせタイムアウトはRPCではなく通知に対するものなので安全。
+ * - 切断中の表示はエフェクト内の setState でリセットせず、戻り値を `ready` で
+ *   ゲートして消す (lintルール react-hooks/set-state-in-effect を踏まないため)。
  */
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { ZMKAppContext } from "@cormoran/zmk-studio-react-hook";
@@ -24,7 +26,7 @@ import { Notification, Request, Response } from "../proto/zmk/key_usage/key_usag
 
 export const KEY_USAGE_IDENTIFIER = "zmk__key_usage";
 
-/** チャンク列の待ち合わせ上限。RPC自体のタイムアウトではない (モジュールdoc参照)。 */
+/** チャンク列の待ち合わせ上限。RPC自体のタイムアウトではない (ファイルdoc参照)。 */
 export const KEY_USAGE_STREAM_TIMEOUT_MS = 60_000;
 
 const CODEC = {
@@ -143,6 +145,14 @@ export function useKeyUsage(): UseKeyUsageReturn {
     });
   }, [zmkApp, subsystemIndex]);
 
+  // 切断したら読み出し中のストリームを畳む。setState は行わないので
+  // react-hooks/set-state-in-effect には踏まれない。
+  useEffect(() => {
+    if (ready) return;
+    pendingRef.current?.finish();
+    pendingRef.current = null;
+  }, [ready]);
+
   const fetchStats = useCallback(async () => {
     if (!ready) return;
 
@@ -229,24 +239,24 @@ export function useKeyUsage(): UseKeyUsageReturn {
         return;
       }
       if (response) {
-        setStats({
+        setStats((current) => ({
           metadata: {
             totalPresses: 0,
-            maxLayers: stats?.metadata.maxLayers ?? 0,
-            maxPositions: stats?.metadata.maxPositions ?? 0,
-            maxKeycode: stats?.metadata.maxKeycode ?? 0,
+            maxLayers: current?.metadata.maxLayers ?? 0,
+            maxPositions: current?.metadata.maxPositions ?? 0,
+            maxKeycode: current?.metadata.maxKeycode ?? 0,
           },
           positions: [],
           keycodes: [],
           fetchedAt: Date.now(),
-        });
+        }));
       }
     } catch (err) {
       setError(errorMessage(err, "Failed to clear key usage statistics"));
     } finally {
       setIsMutating(false);
     }
-  }, [ready, safeCall, stats]);
+  }, [ready, safeCall]);
 
   const saveStats = useCallback(async () => {
     if (!ready) return;
@@ -265,26 +275,15 @@ export function useKeyUsage(): UseKeyUsageReturn {
     }
   }, [ready, safeCall]);
 
-  // 切断時は読み出し中のストリームを畳み、表示も初期化する。
-  useEffect(() => {
-    if (ready) return;
-
-    pendingRef.current?.finish();
-    pendingRef.current = null;
-    setStats(null);
-    setIsLoading(false);
-    setIsMutating(false);
-    setError(null);
-  }, [ready]);
-
   const clearError = useCallback(() => setError(null), []);
 
   return {
     isAvailable: subsystem !== null,
-    stats,
-    isLoading,
-    isMutating,
-    error,
+    // 切断中は前の接続の数値を見せない。再接続後は再度読み出してもらう。
+    stats: ready ? stats : null,
+    isLoading: ready ? isLoading : false,
+    isMutating: ready ? isMutating : false,
+    error: ready ? error : null,
     fetchStats,
     clearStats,
     saveStats,
