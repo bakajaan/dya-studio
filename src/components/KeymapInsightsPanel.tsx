@@ -653,3 +653,132 @@ export function KeymapInsightsPanel({
                   </button>
                   <button
                     type="button"
+                    className="btn-ghost text-xs flex items-center gap-1"
+                    onClick={handleDownloadCsv}
+                  >
+                    <IconDownload size={13} />
+                    {tr("CSV", "CSV")}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          {!deviceUsage.stats &&
+            !deviceUsage.isLoading &&
+            deviceUsage.isAvailable && (
+              <p className="text-xs text-[var(--color-text-muted)]">
+                {tr(
+                  "Press “Read from keyboard” to load the stored counters.",
+                  "「キーボードから読み出す」を押すと保存済みのカウンタを取得します。",
+                )}
+              </p>
+            )}
+        </div>
+      )}
+
+      {tab === "prediction" && (
+        <div className="space-y-3">
+          <p className="text-xs text-[var(--color-text-muted)]">
+            {tr(
+              "Estimates how busy each key would be under the layout you're currently editing, by projecting the device's per-key (not per-position) press history onto the new bindings. Read the device counters on the “On device” tab first.",
+              "編集中のキー配置で各キーがどれくらい使われそうかを、デバイス上のキー別（位置別ではない）打鍵履歴を新しい割り当てに当てはめて見積もります。まず「デバイス上」タブでカウンタを読み出してください。",
+            )}
+          </p>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[var(--color-text-muted)]">
+              {tr("Layout view", "表示レイヤー")}:
+            </span>
+            <select
+              value={predictionScope}
+              onChange={(event) => setPredictionScope(event.target.value)}
+              className="px-2 py-1 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-xs text-[var(--color-text)]"
+            >
+              <option value="all">
+                {tr("All layers combined", "全レイヤー統合")}
+              </option>
+              {layersForSelector.map((layer, index) => (
+                <option key={layer.id} value={String(index)}>
+                  {(layer.name || `Layer ${index}`) +
+                    (index === 0 ? tr(" (default)", "（デフォルト）") : "")}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {keycodeUsageMap.size === 0 && (
+            <div className="flex items-center gap-2">
+              <p className="text-xs text-[var(--color-text-muted)] flex-1">
+                {tr(
+                  "No device keycode history yet.",
+                  "デバイスのキー別履歴がまだありません。",
+                )}
+              </p>
+              <button
+                type="button"
+                className="btn-electric text-xs flex items-center gap-1 flex-shrink-0"
+                onClick={() => void deviceUsage.fetchStats()}
+                disabled={
+                  !deviceUsage.isAvailable ||
+                  deviceUsage.isLoading ||
+                  deviceUsage.isMutating
+                }
+              >
+                <IconRefresh size={13} />
+                {tr("Read", "読み出す")}
+              </button>
+            </div>
+          )}
+
+          {activeLayout && keycodeUsageMap.size > 0 && (
+            <KeyUsageHeatmapSvg
+              layout={activeLayout}
+              getCount={(position) =>
+                predictedCountsByPosition.get(position) ?? 0
+              }
+              maxCount={predictedMaxCount}
+            />
+          )}
+
+          {keycodeUsageMap.size > 0 && (
+            <>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                {tr("Predicted total", "予測総打鍵数")}: {predictedTotal}
+              </p>
+              <div>
+                <h3 className="text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
+                  {tr("Predicted top keys", "予測される打鍵の多いキー")}
+                </h3>
+                {topPredictedKeys.length === 0 && (
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {tr("No data yet.", "まだデータがありません。")}
+                  </p>
+                )}
+                <ol className="space-y-1">
+                  {topPredictedKeys.map(({ position, count }) => (
+                    <li
+                      key={position}
+                      className="text-xs text-[var(--color-text-secondary)] flex items-center gap-2"
+                    >
+                      <span className="font-mono text-[var(--color-text-muted)]">
+                        #{position}
+                      </span>
+                      <span className="flex-1 truncate">
+                        {labelForBinding(predictionLabelLayerIndex, position) ||
+                          "—"}
+                      </span>
+                      <span className="text-[var(--color-text-muted)]">
+                        {count}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </aside>
+  );
+}
