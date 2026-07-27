@@ -37,6 +37,21 @@
  * → 時刻の復元は batteryHistoryStore.toAbsoluteTimestamps()（セッション分割）、
  *   消費ヘースは estimateBatteryDrain()（境界をまたぐペアを除外し、直近の
  *   充電より後の下降ペアだけを平均）に集約した。
+ *
+ * 【2026-07-27 追記 / BLE切断とグラフの時間軸が読めない件】
+ * (1) 切断: getHistory の RPC 自体はキューを通して直列化されているが、
+ *   実データは RPC の外側で BLE 通知として連続で届く（本ファイル冒頭の
+ *   説明の通り、まだ notification streaming 方式）。この通知バーストの間、
+ *   他の RPC（キー使用率の再読込やキーマップ操作など）が同時に走ると
+ *   BLE の帯域を奪い合い、以前キー使用率で直面したのと同種の切断が起きうる。
+ *   これはファームウェア側（バッテリー履歴モジュール）をキー使用率と同じ
+ *   カーソル方式のページング RPC に移行しないと根本解決しないため、
+ *   本リポジトリ（フロントエンド）だけでは直せない。
+ * (2) 時間軸: 以前は開始・終了の2点しかラベルが無く、途中の時刻が
+ *   読めなかった。表示範囲（24h/7d/全期間）に応じて目盛り間隔を自動調整し
+ *   (pickTickIntervalSeconds)、点線グリッド＋ラベルを描画するようにした。
+ *   さらにグラフ上をホバーすると最寄りの点の時刻・残量をツールチップで
+ *   表示する。
  */
 import {
   useCallback,
@@ -45,6 +60,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent,
 } from "react";
 import { IconBattery, IconRefresh, IconTrash } from "@tabler/icons-react";
 import {
@@ -98,6 +114,36 @@ const CHART_WIDTH = 640;
 const CHART_HEIGHT = 200;
 const CHART_PAD = 28;
 
+/** Minimum horizontal spacing (viewBox px) kept between two time-axis labels. */
+const MIN_TICK_SPACING_PX = 50;
+
+/** Candidate gridline spacings, smallest to largest; the first one that keeps
+ * the tick count within the available width is used. */
+const TIME_TICK_INTERVALS_SECONDS = [
+  60,
+  5 * 60,
+  10 * 60,
+  15 * 60,
+  30 * 60,
+  3600,
+  2 * 3600,
+  3 * 3600,
+  4 * 3600,
+  6 * 3600,
+  12 * 3600,
+  24 * 3600,
+  2 * 86400,
+  3 * 86400,
+  7 * 86400,
+  14 * 86400,
+  30 * 86400,
+  90 * 86400,
+  365 * 86400,
+];
+
+const TOOLTIP_WIDTH = 122;
+const TOOLTIP_HEIGHT = 40;
+
 type RangeId = "24h" | "7d" | "all";
 
 const RANGE_HOURS: Record<RangeId, number | null> = {
@@ -118,6 +164,44 @@ function formatTimestamp(timestampSec: number, language: string): string {
   return language === "ja"
     ? `起動後 ${hours}時間${minutes}分`
     : `+${hours}h ${minutes}m after boot`;
+}
+
+/** Short label for a time-axis gridline (coarser than formatTimestamp, since
+ * several of these have to fit side-by-side without overlapping). */
+function formatTickLabel(
+  timestampSec: number,
+  intervalSeconds: number,
+  language: string,
+): string {
+  if (timestampSec < MIN_EPOCH_SECONDS) {
+    const hours = Math.floor(timestampSec / 3600);
+    const minutes = Math.floor((timestampSec % 3600) / 60);
+    return `${hours}:${String(minutes).padStart(2, "0")}`;
+  }
+  const date = new Date(timestampSec * 1000);
+  if (intervalSeconds >= 24 * 3600) {
+    return date.toLocaleDateString(language === "ja" ? "ja-JP" : undefined, {
+      month: "numeric",
+      day: "numeric",
+    });
+  }
+  return date.toLocaleTimeString(language === "ja" ? "ja-JP" : undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** Picks the smallest candidate interval that keeps the number of gridlines
+ * within `maxTicks`, so labels stay readable regardless of the selected
+ * time range (24h / 7d / all). */
+function pickTickIntervalSeconds(
+  spanSeconds: number,
+  maxTicks: number,
+): number {
+  for (const interval of TIME_TICK_INTERVALS_SECONDS) {
+    if (spanSeconds / interval <= maxTicks) return interval;
+  }
+  return TIME_TICK_INTERVALS_SECONDS[TIME_TICK_INTERVALS_SECONDS.length - 1];
 }
 
 export function BatteryHistorySection() {
@@ -147,6 +231,7 @@ export function BatteryHistorySection() {
   const [isWaitingForIdle, setIsWaitingForIdle] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const buffersRef = useRef<Record<number, BatteryPoint[]>>({});
   const autoFetchedRef = useRef(false);
   const deviceKeyRef = useRef(deviceKey);
@@ -407,6 +492,11 @@ export function BatteryHistorySection() {
     ? selectedSource
     : (availableSources[0] ?? 0);
 
+  // 半/表示範囲を切り替えたら、古いグラフを指していたホバー状態を捨てる。
+  useEffect(() => {
+    setHoverIndex(null);
+  }, [activeSource, range]);
+
   // 蓄積分＋受信中の分をマージして表示。受信中の分はセッション（再起動や
   // uint16 桁溢れの切れ目）ごとに絶対時刻へ換算する。
   const allPoints = useMemo(() => {
@@ -446,8 +536,63 @@ export function BatteryHistorySection() {
         charging: point.batteryLevel > previous.batteryLevel,
       };
     });
-    return { minT, maxT, segments };
+    const plotted = points.map((point) => ({
+      x: toX(point.timestamp),
+      y: toY(point.batteryLevel),
+      timestamp: point.timestamp,
+      batteryLevel: point.batteryLevel,
+    }));
+    // 時間軸のグリッド線。表示範囲に応じて間隔を自動調整する（1時間刻み〜
+    // 数日刻みまで）。ラベルが重ならないよう、幅から最大本数を逆算する。
+    const maxTicks = Math.max(3, Math.floor(innerW / MIN_TICK_SPACING_PX));
+    const tickInterval = pickTickIntervalSeconds(span, maxTicks);
+    const rawTicks: number[] = [];
+    let cursor = Math.ceil(minT / tickInterval) * tickInterval;
+    while (cursor <= maxT) {
+      rawTicks.push(cursor);
+      cursor += tickInterval;
+    }
+    const tickTimestamps = rawTicks.length >= 2 ? rawTicks : [minT, maxT];
+    const ticks = tickTimestamps.map((timestamp) => {
+      const x = toX(timestamp);
+      const anchor: "start" | "middle" | "end" =
+        x <= CHART_PAD + 18
+          ? "start"
+          : x >= CHART_WIDTH - CHART_PAD - 18
+            ? "end"
+            : "middle";
+      return { x, timestamp, anchor };
+    });
+    return { minT, maxT, segments, plotted, ticks, tickInterval };
   }, [points]);
+
+  const handleChartMouseMove = useCallback(
+    (event: MouseEvent<SVGRectElement>) => {
+      if (!chart || chart.plotted.length === 0) return;
+      const svg = event.currentTarget.ownerSVGElement;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      if (rect.width === 0) return;
+      const scale = CHART_WIDTH / rect.width;
+      const svgX = (event.clientX - rect.left) * scale;
+      let nearest = 0;
+      let nearestDist = Infinity;
+      for (let index = 0; index < chart.plotted.length; index += 1) {
+        const dist = Math.abs(chart.plotted[index].x - svgX);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearest = index;
+        }
+      }
+      setHoverIndex(nearest);
+    },
+    [chart],
+  );
+
+  const handleChartMouseLeave = useCallback(() => setHoverIndex(null), []);
+
+  const hoverPoint =
+    chart && hoverIndex !== null ? chart.plotted[hoverIndex] ?? null : null;
 
   // 消費ヘースと推定残り時間は共通ロジックに集約（セントラル/ペリフェラル
   // どちらでも同じ扱いになるようにするため）。
@@ -528,8 +673,8 @@ export function BatteryHistorySection() {
         <>
           <p className="text-xs text-[var(--color-text-muted)] mb-3">
             {tr(
-              "Recorded on the keyboard and also kept in this browser, so older entries stay visible after the keyboard's ring buffer wraps. Rising sections are charging, falling sections are discharging.",
-              "キーボード本体の記録を取得し、このブラウザにも蓄積します（本体の履歴が上書きされても過去分を見られます）。上昇している区間が充電中、下降している区間が使用中です。",
+              "Recorded on the keyboard and also kept in this browser, so older entries stay visible after the keyboard's ring buffer wraps. Rising sections are charging, falling sections are discharging. Hover the chart to see the exact time and level.",
+              "キーボード本体の記録を取得し、このブラウザにも蓄積します（本体の履歴が上書きされても過去分を見られます）。上昇している区間が充電中、下降している区間が使用中です。グラフにマウスを合わせると正確な時刻と残量を確認できます。",
             )}
           </p>
 
@@ -640,6 +785,7 @@ export function BatteryHistorySection() {
             <svg
               viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
               className="w-full max-w-3xl"
+              style={{ cursor: "crosshair" }}
             >
               {[0, 25, 50, 75, 100].map((level) => {
                 const y =
@@ -668,6 +814,29 @@ export function BatteryHistorySection() {
                   </g>
                 );
               })}
+              {chart.ticks.map((tick, index) => (
+                <g key={index}>
+                  <line
+                    x1={tick.x}
+                    x2={tick.x}
+                    y1={CHART_PAD}
+                    y2={CHART_HEIGHT - CHART_PAD}
+                    stroke="var(--color-border)"
+                    strokeWidth={1}
+                    strokeOpacity={0.5}
+                    strokeDasharray="2 3"
+                  />
+                  <text
+                    x={tick.x}
+                    y={CHART_HEIGHT - 6}
+                    textAnchor={tick.anchor}
+                    fontSize={10}
+                    fill="var(--color-text-muted)"
+                  >
+                    {formatTickLabel(tick.timestamp, chart.tickInterval, language)}
+                  </text>
+                </g>
+              ))}
               {chart.segments.map((segment, index) => (
                 <line
                   key={index}
@@ -684,23 +853,72 @@ export function BatteryHistorySection() {
                   strokeLinecap="round"
                 />
               ))}
-              <text
+              <rect
                 x={CHART_PAD}
-                y={CHART_HEIGHT - 6}
-                fontSize={10}
-                fill="var(--color-text-muted)"
-              >
-                {formatTimestamp(chart.minT, language)}
-              </text>
-              <text
-                x={CHART_WIDTH - CHART_PAD}
-                y={CHART_HEIGHT - 6}
-                textAnchor="end"
-                fontSize={10}
-                fill="var(--color-text-muted)"
-              >
-                {formatTimestamp(chart.maxT, language)}
-              </text>
+                y={CHART_PAD}
+                width={CHART_WIDTH - CHART_PAD * 2}
+                height={CHART_HEIGHT - CHART_PAD * 2}
+                fill="transparent"
+                style={{ pointerEvents: "all" }}
+                onMouseMove={handleChartMouseMove}
+                onMouseLeave={handleChartMouseLeave}
+              />
+              {hoverPoint && (
+                <g style={{ pointerEvents: "none" }}>
+                  <line
+                    x1={hoverPoint.x}
+                    x2={hoverPoint.x}
+                    y1={CHART_PAD}
+                    y2={CHART_HEIGHT - CHART_PAD}
+                    stroke="var(--color-text-muted)"
+                    strokeDasharray="3 3"
+                    strokeWidth={1}
+                  />
+                  <circle
+                    cx={hoverPoint.x}
+                    cy={hoverPoint.y}
+                    r={3.5}
+                    fill="var(--color-electric)"
+                    stroke="var(--color-bg)"
+                    strokeWidth={1.5}
+                  />
+                  <g
+                    transform={`translate(${Math.min(
+                      Math.max(hoverPoint.x + 10, CHART_PAD),
+                      CHART_WIDTH - CHART_PAD - TOOLTIP_WIDTH,
+                    )}, ${Math.min(
+                      Math.max(hoverPoint.y - TOOLTIP_HEIGHT - 8, 4),
+                      CHART_HEIGHT - TOOLTIP_HEIGHT - 4,
+                    )})`}
+                  >
+                    <rect
+                      width={TOOLTIP_WIDTH}
+                      height={TOOLTIP_HEIGHT}
+                      rx={6}
+                      fill="var(--color-surface)"
+                      stroke="var(--color-border)"
+                      strokeWidth={1}
+                    />
+                    <text
+                      x={8}
+                      y={16}
+                      fontSize={10}
+                      fill="var(--color-text-muted)"
+                    >
+                      {formatTimestamp(hoverPoint.timestamp, language)}
+                    </text>
+                    <text
+                      x={8}
+                      y={31}
+                      fontSize={12}
+                      fontWeight={600}
+                      fill="var(--color-electric)"
+                    >
+                      {hoverPoint.batteryLevel}%
+                    </text>
+                  </g>
+                </g>
+              )}
             </svg>
           )}
 
