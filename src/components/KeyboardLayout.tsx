@@ -23,7 +23,9 @@ import type { KeyboardLayoutType } from "../lib/keyboardLayouts";
 const BASE_UNIT_SIZE = 54;
 // Min and max scale limits for responsive sizing
 const MIN_SCALE = 0.8;
-const MAX_SCALE = 1.2;
+// Raised from 1.2 so the preview can actually grow to fill wide/ultrawide
+// containers instead of staying small with unused space around it.
+const MAX_SCALE = 1.5;
 
 interface KeyboardLayoutProps {
   /** Physical layout configuration */
