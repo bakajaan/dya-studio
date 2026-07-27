@@ -1043,6 +1043,7 @@ export function KeymapPage() {
                 layers={keymap.keymap.layers}
                 layersForSelector={layersForSelector}
                 behaviors={keymap.behaviors}
+                originalBindings={keymap.originalBindings}
                 keyboardLayout={keyboardLayoutContext.layout}
                 runtimeMacros={runtimeMacro.macros}
                 highlightedKeys={inputStream.highlightedKeys}
