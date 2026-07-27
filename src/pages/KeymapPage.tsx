@@ -591,7 +591,7 @@ export function KeymapPage() {
           <div
             className={
               showInsightsPanel
-                ? "xl:grid xl:grid-cols-[minmax(0,1fr)_22rem] xl:gap-6 xl:items-start 2xl:grid-cols-[minmax(0,1fr)_26rem] 2xl:gap-8"
+                ? "xl:grid xl:grid-cols-[minmax(0,1fr)_24rem] xl:gap-6 xl:items-start 2xl:grid-cols-[minmax(0,1fr)_28rem] 2xl:gap-8"
                 : undefined
             }
           >
