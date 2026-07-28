@@ -35,15 +35,18 @@ describe("batteryForecast", () => {
 
   it("splits segments at charge events", () => {
     const points = [
+      // 0〜4時間: 60% から 5%/時 で放電
       ...ramp(60, 5, 4),
-      // 充電
-      { timestamp: BASE + 5 * HOUR, batteryLevel: 95 },
-      ...ramp(95, 5, 4, BASE + 6 * HOUR),
+      // 5時間目に 95% へ充電。以降 9時間目まで 5%/時 で放電
+      ...ramp(95, 5, 4, BASE + 5 * HOUR),
     ];
     const segments = splitDischargeSegments(points);
     expect(segments).toHaveLength(2);
     expect(segments[0].startLevel).toBe(60);
+    expect(segments[0].endLevel).toBe(40);
+    expect(segments[0].ratePerHour).toBeCloseTo(5, 6);
     expect(segments[1].startLevel).toBe(95);
+    expect(segments[1].endLevel).toBe(75);
     expect(segments[1].ratePerHour).toBeCloseTo(5, 6);
   });
 
