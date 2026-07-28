@@ -2,6 +2,7 @@ import { useContext, useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   IconChartBar,
+  IconFlask,
   IconHome,
   IconKeyboard,
   IconPlugConnected,
@@ -32,6 +33,7 @@ import { KeymapPage } from "./pages/KeymapPage";
 import { TrackballPage } from "./pages/TrackballPage";
 import { MacroComboPage } from "./pages/MacroComboPage";
 import { InsightsPage } from "./pages/InsightsPage";
+import { StudioLabPage } from "./pages/StudioLabPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { CustomSubsystemsPage } from "./pages/CustomSubsystemsPage";
 import { TroubleshootingPage } from "./pages/TroubleshootingPage";
@@ -72,6 +74,14 @@ function getTabs(t: (key: string) => string): TabItem[] {
       label: t("Insights"),
       icon: <IconChartBar size={18} />,
       content: <InsightsPage />,
+    },
+    // Lab: dtsiインポート / バッテリー予測 / 再接続計測 / 配列改善サジェスト /
+    // 自動スナップショット / デバイス別プロファイルをまとめた実験タブ。
+    {
+      id: "lab",
+      label: "Lab",
+      icon: <IconFlask size={18} />,
+      content: <StudioLabPage />,
     },
     // 打鍵統計（旧「Key Usage」タブ）は Keymap タブの Insights パネルに統合済み。
     // デバイス側の累積カウンタもキーマップを編集しながら同じ場所で見られる。
