@@ -11,8 +11,17 @@
  * 実機への書き込みは既存の Keymap タブ（プロファイル適用）に任せ、
  * この画面は localStorage に閉じた安全な操作だけを行う。
  */
-import { useCallback, useMemo, useState, type ChangeEvent } from "react";
+import {
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ChangeEvent,
+} from "react";
 
+import { useLanguage } from "../hooks/useLanguage";
+import { labText, type LabKey } from "../i18n/labStrings";
+import { ConnectionContext } from "../components/DeviceConnection";
 import { importKeymapDtsi } from "../lib/keymapDtsiImport";
 import {
   listProfiles,
@@ -48,6 +57,7 @@ import {
   deviceKeyFor,
   listDeviceProfileBindings,
   removeDeviceProfileBinding,
+  resolveAutoProfile,
   setDeviceProfileBinding,
 } from "../lib/profileAutoSwitch";
 
@@ -62,6 +72,12 @@ const INPUT =
 
 /** batteryHistoryStore 内の STORAGE_KEY と同じ値（向こうは非公開）。 */
 const BATTERY_HISTORY_KEY = "dya-studio-battery-history";
+
+/** Lab タブ専用辞書を引くヘルパー。 */
+function useLabText(): (key: LabKey) => string {
+  const { language } = useLanguage();
+  return useCallback((key: LabKey) => labText(language, key), [language]);
+}
 
 function listBatteryDeviceKeys(): string[] {
   try {
@@ -80,6 +96,7 @@ function listBatteryDeviceKeys(): string[] {
 /* ------------------------------------------------------------------ */
 
 function DtsiImportPanel() {
+  const t = useLabText();
   const [text, setText] = useState("");
   const [name, setName] = useState("dtsi-import");
   const [result, setResult] = useState<{
@@ -88,15 +105,18 @@ function DtsiImportPanel() {
   } | null>(null);
   const [savedName, setSavedName] = useState<string | null>(null);
 
-  const handleFile = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const content = await file.text();
-    setText(content);
-    setName(file.name.replace(/\.(keymap|dtsi|overlay)$/, ""));
-    setResult(null);
-    setSavedName(null);
-  }, []);
+  const handleFile = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const content = await file.text();
+      setText(content);
+      setName(file.name.replace(/\.(keymap|dtsi|overlay)$/, ""));
+      setResult(null);
+      setSavedName(null);
+    },
+    [],
+  );
 
   const parse = useCallback(() => {
     setSavedName(null);
@@ -111,11 +131,8 @@ function DtsiImportPanel() {
 
   return (
     <section className={CARD}>
-      <h2 className={HEADING}>dtsi インポート</h2>
-      <p className={MUTED}>
-        zmk-keymap-common などの .keymap / .dtsi を読み込んでキーマップ
-        プロファイルに変換します。保存後は Keymap タブから実機に適用できます。
-      </p>
+      <h2 className={HEADING}>{t("dtsiTitle")}</h2>
+      <p className={MUTED}>{t("dtsiDesc")}</p>
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="file"
@@ -127,38 +144,38 @@ function DtsiImportPanel() {
           className={INPUT}
           value={name}
           onChange={(event) => setName(event.target.value)}
-          placeholder="プロファイル名"
+          placeholder={t("profileName")}
         />
         <button className={BUTTON} onClick={parse} disabled={!text.trim()}>
-          解析
+          {t("parse")}
         </button>
         <button className={BUTTON} onClick={save} disabled={!result}>
-          プロファイルとして保存
+          {t("saveAsProfile")}
         </button>
       </div>
       <textarea
         className="w-full h-32 rounded-md border border-[var(--color-border)] bg-transparent p-2 font-mono text-[11px]"
         value={text}
         onChange={(event) => setText(event.target.value)}
-        placeholder="ここに dtsi を貼り付けることもできます"
+        placeholder={t("dtsiPlaceholder")}
       />
       {result && (
         <div className="space-y-1 text-xs">
           <div>
-            レイヤー {result.profile.layers.length} 枚 / キー数{" "}
+            {t("layers")}: {result.profile.layers.length} / {t("keys")}:{" "}
             {result.profile.keyCount}
           </div>
           <ul className="list-disc pl-4">
             {result.profile.layers.map((layer) => (
               <li key={layer.name}>
-                {layer.name}（{layer.bindings.length} キー）
+                {layer.name}（{layer.bindings.length}）
               </li>
             ))}
           </ul>
           {result.warnings.length > 0 && (
             <details>
               <summary className="cursor-pointer text-[var(--color-warning,#d97706)]">
-                警告 {result.warnings.length} 件
+                {t("warnings")}: {result.warnings.length}
               </summary>
               <ul className="list-disc pl-4">
                 {result.warnings.slice(0, 20).map((warning, index) => (
@@ -167,7 +184,11 @@ function DtsiImportPanel() {
               </ul>
             </details>
           )}
-          {savedName && <div>「{savedName}」を保存しました。</div>}
+          {savedName && (
+            <div>
+              {t("saved")}: {savedName}
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -179,6 +200,7 @@ function DtsiImportPanel() {
 /* ------------------------------------------------------------------ */
 
 function BatteryForecastPanel() {
+  const t = useLabText();
   const deviceKeys = useMemo(() => listBatteryDeviceKeys(), []);
   const [deviceKey, setDeviceKey] = useState(deviceKeys[0] ?? "");
 
@@ -198,11 +220,9 @@ function BatteryForecastPanel() {
 
   return (
     <section className={CARD}>
-      <h2 className={HEADING}>バッテリー残量予測</h2>
+      <h2 className={HEADING}>{t("batteryTitle")}</h2>
       {deviceKeys.length === 0 ? (
-        <p className={MUTED}>
-          まだバッテリー履歴がありません。接続してしばらく使うと蓄積されます。
-        </p>
+        <p className={MUTED}>{t("batteryEmpty")}</p>
       ) : (
         <>
           <select
@@ -218,7 +238,7 @@ function BatteryForecastPanel() {
           </select>
           <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             <div>
-              <div className={MUTED}>現在の残量</div>
+              <div className={MUTED}>{t("currentLevel")}</div>
               <div>
                 {forecast.currentLevel === null
                   ? "—"
@@ -226,7 +246,7 @@ function BatteryForecastPanel() {
               </div>
             </div>
             <div>
-              <div className={MUTED}>消費ペース</div>
+              <div className={MUTED}>{t("drainRate")}</div>
               <div>
                 {forecast.ratePerHour === null
                   ? "—"
@@ -234,17 +254,17 @@ function BatteryForecastPanel() {
               </div>
             </div>
             <div>
-              <div className={MUTED}>10% まで</div>
+              <div className={MUTED}>{t("untilThreshold")}</div>
               <div>{formatHours(forecast.hoursToThreshold)}</div>
             </div>
             <div>
-              <div className={MUTED}>0% まで</div>
+              <div className={MUTED}>{t("untilEmpty")}</div>
               <div>{formatHours(forecast.hoursToEmpty)}</div>
             </div>
           </div>
           <p className={MUTED}>
-            根拠：直近の放電区間 {forecast.sampleHours.toFixed(1)} 時間 /{" "}
-            {forecast.samplePoints} 点、当てはまり度 R² ={" "}
+            {t("basis")}: {t("sampleHours")} {forecast.sampleHours.toFixed(1)} /{" "}
+            {t("samplePoints")} {forecast.samplePoints} / {t("fit")}{" "}
             {forecast.rSquared === null ? "—" : forecast.rSquared.toFixed(2)}
             （{forecast.reason}）
           </p>
@@ -252,9 +272,9 @@ function BatteryForecastPanel() {
             <table className="w-full text-left text-xs">
               <thead className={MUTED}>
                 <tr>
-                  <th className="py-1">日付</th>
-                  <th>減少</th>
-                  <th>記録時間</th>
+                  <th className="py-1">{t("date")}</th>
+                  <th>{t("drop")}</th>
+                  <th>{t("recordedHours")}</th>
                   <th>%/h</th>
                 </tr>
               </thead>
@@ -281,14 +301,19 @@ function BatteryForecastPanel() {
 /* ------------------------------------------------------------------ */
 
 function ReconnectPanel() {
+  const t = useLabText();
   const [revision, setRevision] = useState(0);
-  const events = useMemo(() => listReconnectEvents(localStorage), [revision]);
+  const events = useMemo(() => {
+    // revision はログ消去後に読み直すためのトリガ。
+    void revision;
+    return listReconnectEvents(localStorage);
+  }, [revision]);
   const summary = useMemo(() => summarizeReconnects(events), [events]);
 
   return (
     <section className={CARD}>
       <div className="flex items-center justify-between">
-        <h2 className={HEADING}>BLE 再接続時間</h2>
+        <h2 className={HEADING}>{t("reconnectTitle")}</h2>
         <button
           className={BUTTON}
           onClick={() => {
@@ -297,34 +322,32 @@ function ReconnectPanel() {
           }}
           disabled={events.length === 0}
         >
-          ログを消去
+          {t("clearLog")}
         </button>
       </div>
       {events.length === 0 ? (
-        <p className={MUTED}>
-          まだ記録がありません。接続のたびに自動で記録されます。
-        </p>
+        <p className={MUTED}>{t("reconnectEmpty")}</p>
       ) : (
         <>
           <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
             <div>
-              <div className={MUTED}>中央値</div>
+              <div className={MUTED}>{t("median")}</div>
               <div>{formatDurationMs(summary.medianMs)}</div>
             </div>
             <div>
-              <div className={MUTED}>p90</div>
+              <div className={MUTED}>{t("p90")}</div>
               <div>{formatDurationMs(summary.p90Ms)}</div>
             </div>
             <div>
-              <div className={MUTED}>最短</div>
+              <div className={MUTED}>{t("best")}</div>
               <div>{formatDurationMs(summary.bestMs)}</div>
             </div>
             <div>
-              <div className={MUTED}>最長</div>
+              <div className={MUTED}>{t("worst")}</div>
               <div>{formatDurationMs(summary.worstMs)}</div>
             </div>
             <div>
-              <div className={MUTED}>成功率</div>
+              <div className={MUTED}>{t("successRate")}</div>
               <div>
                 {Math.round(summary.successRate * 100)}%（{summary.successes}/
                 {summary.attempts}）
@@ -353,6 +376,7 @@ function ReconnectPanel() {
 /* ------------------------------------------------------------------ */
 
 function LayoutSuggestionPanel() {
+  const t = useLabText();
   const stats = useMemo(() => loadStats(localStorage), []);
   const keyCount = useMemo(() => {
     const positions = Object.keys(stats.countsByPosition).map(Number);
@@ -373,22 +397,17 @@ function LayoutSuggestionPanel() {
 
   return (
     <section className={CARD}>
-      <h2 className={HEADING}>配列改善サジェスト</h2>
-      <p className={MUTED}>
-        打鍵回数と「押しやすさ」の組み合わせから、入れ替えると楽になる
-        キーを提案します（自動では変更しません）。
-      </p>
+      <h2 className={HEADING}>{t("layoutTitle")}</h2>
+      <p className={MUTED}>{t("layoutDesc")}</p>
       {suggestions.length === 0 ? (
-        <p className={MUTED}>
-          現状で提案はありません。打鍵統計が蓄積されると表示されます。
-        </p>
+        <p className={MUTED}>{t("layoutEmpty")}</p>
       ) : (
         <ul className="space-y-1 text-xs">
           {suggestions.map((suggestion) => (
             <li key={`${suggestion.fromPosition}-${suggestion.toPosition}`}>
-              {suggestion.fromLabel}（{suggestion.fromCount} 回）⇄{" "}
-              {suggestion.toLabel}（{suggestion.toCount} 回） 推定削減{" "}
-              {Math.round(suggestion.savingRatio * 100)}%
+              {suggestion.fromLabel}（{suggestion.fromCount} {t("presses")}）⇄{" "}
+              {suggestion.toLabel}（{suggestion.toCount} {t("presses")}）{" "}
+              {t("estimatedSaving")} {Math.round(suggestion.savingRatio * 100)}%
             </li>
           ))}
         </ul>
@@ -402,6 +421,7 @@ function LayoutSuggestionPanel() {
 /* ------------------------------------------------------------------ */
 
 function AutoSnapshotPanel() {
+  const t = useLabText();
   const [enabled, setEnabled] = useState(() =>
     isAutoSnapshotEnabled(localStorage),
   );
@@ -409,7 +429,7 @@ function AutoSnapshotPanel() {
 
   return (
     <section className={CARD}>
-      <h2 className={HEADING}>自動スナップショット</h2>
+      <h2 className={HEADING}>{t("autoSnapshotTitle")}</h2>
       <label className="flex items-center gap-2 text-xs">
         <input
           type="checkbox"
@@ -419,15 +439,14 @@ function AutoSnapshotPanel() {
             setAutoSnapshotEnabled(localStorage, event.target.checked);
           }}
         />
-        キーマップを保存するときに自動でスナップショットを残す
+        {t("autoSnapshotToggle")}
       </label>
       <p className={MUTED}>
-        同じ内容の連発や 1 分以内の連打保存では作らないので、
-        履歴が埋まりません。現在 {snapshots.length} 件保存されています。
+        {t("autoSnapshotDesc")} {t("snapshotCount")}: {snapshots.length}
       </p>
       {snapshots[0] && (
         <p className={MUTED}>
-          最新：{snapshots[0].note}（
+          {t("latest")}: {snapshots[0].note}（
           {new Date(snapshots[0].savedAt).toLocaleString()}）
         </p>
       )}
@@ -440,15 +459,32 @@ function AutoSnapshotPanel() {
 /* ------------------------------------------------------------------ */
 
 function ProfileBindingPanel() {
+  const t = useLabText();
+  const { isConnected, deviceName: connectedName } =
+    useContext(ConnectionContext);
   const [revision, setRevision] = useState(0);
-  const bindings = useMemo(
-    () => listDeviceProfileBindings(localStorage),
-    [revision],
-  );
-  const profiles = useMemo(() => listProfiles(), [revision]);
+  const bindings = useMemo(() => {
+    void revision;
+    return listDeviceProfileBindings(localStorage);
+  }, [revision]);
+  const profiles = useMemo(() => {
+    void revision;
+    return listProfiles();
+  }, [revision]);
   const [deviceName, setDeviceName] = useState("");
   const [profileName, setProfileName] = useState(profiles[0]?.name ?? "");
   const [autoApply, setAutoApply] = useState(true);
+
+  // 接続中のデバイスに対する判定結果（実適用は Keymap タブに任せる）。
+  const resolution = useMemo(() => {
+    void revision;
+    if (!isConnected || !connectedName) return null;
+    return resolveAutoProfile(
+      localStorage,
+      deviceKeyFor({ name: connectedName }),
+      listProfiles(),
+    );
+  }, [isConnected, connectedName, revision]);
 
   const add = useCallback(() => {
     if (!deviceName.trim() || !profileName) return;
@@ -462,22 +498,37 @@ function ProfileBindingPanel() {
     setRevision((value) => value + 1);
   }, [deviceName, profileName, autoApply]);
 
+  const resolutionText = (): string => {
+    if (!resolution) return t("notConnected");
+    switch (resolution.status) {
+      case "auto-apply":
+        return t("statusAutoApply");
+      case "suggest":
+        return t("statusSuggest");
+      case "missing-profile":
+        return t("statusMissingProfile");
+      default:
+        return t("statusNone");
+    }
+  };
+
   return (
     <section className={CARD}>
-      <h2 className={HEADING}>デバイス別プロファイル</h2>
+      <h2 className={HEADING}>{t("bindingTitle")}</h2>
+      <p className={MUTED}>{t("bindingDesc")}</p>
       <p className={MUTED}>
-        デバイス名とキーマッププロファイルを紐づけておくと、次回接続時に
-                自動適用（または提案）されます。
+        {t("connectedDevice")}: {connectedName ?? "—"} / {resolutionText()}
+        {resolution?.profile ? `（${resolution.profile.name}）` : ""}
       </p>
       {profiles.length === 0 ? (
-        <p className={MUTED}>先にキーマッププロファイルを保存してください。</p>
+        <p className={MUTED}>{t("bindingNoProfiles")}</p>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <input
             className={INPUT}
             value={deviceName}
             onChange={(event) => setDeviceName(event.target.value)}
-            placeholder="デバイス名（例: jisaku_1）"
+            placeholder={t("deviceNamePlaceholder")}
           />
           <select
             className={INPUT}
@@ -496,10 +547,10 @@ function ProfileBindingPanel() {
               checked={autoApply}
               onChange={(event) => setAutoApply(event.target.checked)}
             />
-            自動適用
+            {t("autoApply")}
           </label>
           <button className={BUTTON} onClick={add} disabled={!deviceName.trim()}>
-            紐づける
+            {t("bind")}
           </button>
         </div>
       )}
@@ -509,8 +560,8 @@ function ProfileBindingPanel() {
             <li key={binding.deviceKey} className="flex items-center gap-2">
               <span className="flex-1">
                 {binding.deviceLabel ?? binding.deviceKey} →{" "}
-                {binding.profileName}
-                {binding.autoApply ? "（自動適用）" : "（提案のみ）"}
+                {binding.profileName}（
+                {binding.autoApply ? t("autoApply") : t("suggestOnly")}）
               </span>
               <button
                 className={BUTTON}
@@ -519,7 +570,7 @@ function ProfileBindingPanel() {
                   setRevision((value) => value + 1);
                 }}
               >
-                削除
+                {t("remove")}
               </button>
             </li>
           ))}
