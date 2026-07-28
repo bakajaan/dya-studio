@@ -263,7 +263,7 @@ export function parseKeymapDtsi(source: string): DtsiImportResult {
   const section = extractKeymapSection(stripComments(source));
   const layers: ImportedLayer[] = [];
 
-  const nodePattern = /([A-Za-z0-9_\-]+)\s*\{([^{}]*?)\}/g;
+  const nodePattern = /([A-Za-z0-9_-]+)\s*\{([^{}]*?)\}/g;
   let match: RegExpExecArray | null;
   while ((match = nodePattern.exec(section)) !== null) {
     const nodeName = match[1];
