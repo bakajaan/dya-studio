@@ -27,6 +27,12 @@ import {
   trackConnectFailed,
   classifyConnectError,
 } from "../lib/analytics";
+import {
+  startReconnectTimer,
+  type ReconnectOutcome,
+  type ReconnectTransport,
+} from "../lib/reconnectMetrics";
+import { deviceKeyFor } from "../lib/profileAutoSwitch";
 
 export type ConnectionMethod = "serial" | "ble" | "demo";
 
@@ -40,6 +46,13 @@ export const AUTO_RECONNECT_MIN_DISPLAY_MS = 600;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 接続方式を計測ログの transport 値に対応づける。 */
+function transportOf(method: ConnectionMethod): ReconnectTransport {
+  if (method === "ble") return "ble";
+  if (method === "serial") return "usb";
+  return "unknown";
 }
 
 // Simple connection context for UI components
@@ -126,12 +139,49 @@ export function DeviceConnectionProvider({
   // fired, so a later device-info refresh doesn't re-report it.
   const connectedTrackedRef = useRef(false);
 
-  const reportConnectFailed = useCallback((error: unknown) => {
-    const method = attemptedMethodRef.current;
-    if (!method) return;
-    attemptedMethodRef.current = null;
-    trackConnectFailed(method, classifyConnectError(error));
-  }, []);
+  // 接続開始から接続完了までの計測タイマー（基本課題である BLE 復帰
+  // 待ち時間を数値化する）。finish() は 1 回しか効かないので、成功・失敗・
+  // キャンセルのどの経路から呼んでも二重記録にならない。
+  const connectTimerRef = useRef<{
+    finish: (outcome: ReconnectOutcome, note?: string) => unknown;
+  } | null>(null);
+  // 直近に接続できたデバイスのキー。計測開始時点ではまだデバイス名を
+  // 知らないため、前回のキーを使って集計でデバイス別に分けられるようにする。
+  const lastDeviceKeyRef = useRef<string>("unknown");
+
+  const finishConnectTimer = useCallback(
+    (outcome: ReconnectOutcome, note?: string) => {
+      const timer = connectTimerRef.current;
+      if (!timer) return;
+      connectTimerRef.current = null;
+      timer.finish(outcome, note);
+    },
+    [],
+  );
+
+  const beginConnectTimer = useCallback(
+    (transport: ReconnectTransport, trigger: "auto" | "manual") => {
+      // 前の試行が未確定のままなら打ち切ってから新しい試行を開始する。
+      finishConnectTimer("cancelled");
+      connectTimerRef.current = startReconnectTimer(localStorage, {
+        transport,
+        trigger,
+        deviceKey: lastDeviceKeyRef.current,
+      });
+    },
+    [finishConnectTimer],
+  );
+
+  const reportConnectFailed = useCallback(
+    (error: unknown) => {
+      finishConnectTimer("failed", classifyConnectError(error));
+      const method = attemptedMethodRef.current;
+      if (!method) return;
+      attemptedMethodRef.current = null;
+      trackConnectFailed(method, classifyConnectError(error));
+    },
+    [finishConnectTimer],
+  );
 
   // Report connection outcomes exactly once per attempt. Reading them from
   // committed state (rather than only from the connect() promise) covers the
@@ -141,6 +191,9 @@ export function DeviceConnectionProvider({
     const name = zmkApp.state.deviceInfo?.name;
     if (zmkApp.isConnected && name && !connectedTrackedRef.current) {
       connectedTrackedRef.current = true;
+      lastDeviceKeyRef.current = deviceKeyFor({ name });
+      // 接続完了：ここが「使えるようになった瞬間」なので、この時点で計測を締める。
+      finishConnectTimer("connected");
       // Auto-reconnect is always over paired serial and leaves the ref unset.
       trackKeyboardConnected(attemptedMethodRef.current ?? "serial", name);
       attemptedMethodRef.current = null;
@@ -148,7 +201,11 @@ export function DeviceConnectionProvider({
     if (!zmkApp.isConnected) {
       connectedTrackedRef.current = false;
     }
-  }, [zmkApp.isConnected, zmkApp.state.deviceInfo?.name]);
+  }, [
+    zmkApp.isConnected,
+    zmkApp.state.deviceInfo?.name,
+    finishConnectTimer,
+  ]);
 
   useEffect(() => {
     if (zmkApp.state.error) {
@@ -166,6 +223,7 @@ export function DeviceConnectionProvider({
     const cancelledState = { current: false };
     cancelReconnectRef.current = () => {
       cancelledState.current = true;
+      finishConnectTimer("cancelled");
       setIsReconnecting(false);
     };
 
@@ -178,6 +236,9 @@ export function DeviceConnectionProvider({
       }
 
       setIsReconnecting(true);
+      // ペア済みポートへの自動再接続。これが毎回体感される復帰待ち時間なので
+      // 必ず記録する。
+      beginConnectTimer("usb", "auto");
       let transport: RpcTransport | null = null;
       try {
         // Run the reconnect attempt and the minimum-display timer in
@@ -192,12 +253,14 @@ export function DeviceConnectionProvider({
           // User cancelled or component unmounted while we were
           // reconnecting: release the transport instead of using it.
           transport?.abortController.abort();
+          finishConnectTimer("cancelled");
           return;
         }
 
         if (!transport) {
           // No paired port after all (race with getPairedSerialPorts
           // above) -- fall back to the normal connect screen.
+          finishConnectTimer("failed", "no-paired-port");
           return;
         }
 
@@ -206,6 +269,10 @@ export function DeviceConnectionProvider({
         if (!cancelledState.current) {
           console.warn("Auto-reconnect to paired serial port failed:", error);
         }
+        finishConnectTimer(
+          cancelledState.current ? "cancelled" : "failed",
+          classifyConnectError(error),
+        );
       } finally {
         if (!cancelledState.current) {
           setIsReconnecting(false);
@@ -232,6 +299,7 @@ export function DeviceConnectionProvider({
         connectFn = connectUSB;
       }
       attemptedMethodRef.current = method;
+      beginConnectTimer(transportOf(method), "manual");
       try {
         await zmkApp.connect(connectFn);
       } catch (error) {
@@ -242,22 +310,24 @@ export function DeviceConnectionProvider({
         throw error;
       }
     },
-    [zmkApp, reportConnectFailed],
+    [zmkApp, reportConnectFailed, beginConnectTimer],
   );
 
   const handleDisconnect = useCallback(() => {
+    finishConnectTimer("cancelled");
     zmkApp.disconnect();
-  }, [zmkApp]);
+  }, [zmkApp, finishConnectTimer]);
 
   const handleCancelReconnect = useCallback(() => {
     cancelReconnectRef.current();
+    finishConnectTimer("cancelled");
     // If the cancel lands while the auto-reconnect is already awaiting the
     // RPC handshake, `zmkApp.connect()` has set `isLoading` and won't clear it
     // until the connect-timeout watchdog fires. Abort that in-flight attempt so
     // the connect screen doesn't stay stuck in the loading state; `disconnect`
     // also resets `isLoading`/`error` back to the idle disconnected state.
     zmkApp.disconnect();
-  }, [zmkApp]);
+  }, [zmkApp, finishConnectTimer]);
 
   const connectionValue: ConnectionContextValue = {
     isConnected: zmkApp.isConnected,
