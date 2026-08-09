@@ -1,0 +1,115 @@
+name: Assisted upstream merge
+
+# Performs the real git 3-way merge of cormoran/dya-studio (upstream) into this
+# fork on a runner, applies scripts/sync/merge_resolutions.py when present, and
+# publishes the outcome to the sync/upstream-merged branch together with
+# MERGE_CONFLICTS.md / CHECKS.md so the result can be reviewed without runner
+# log access.
+#
+# Workflow files are deliberately excluded from the merge result: GITHUB_TOKEN
+# is not allowed to push changes under .github/workflows, and those three
+# upstream changes are applied separately.
+
+on:
+  push:
+    branches:
+      - sync/upstream-2026.08.09.0
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Configure git
+        run: |
+          git config user.name "dya-studio sync bot"
+          git config user.email "actions@github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/cormoran/dya-studio.git
+          git fetch --no-tags upstream main
+
+      - name: Merge upstream/main
+        run: |
+          echo "BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git merge --no-edit --no-ff upstream/main || echo "conflicts detected"
+
+      - name: Keep our workflow files out of the merge result
+        run: |
+          git checkout "$BASE_SHA" -- .github/workflows
+          git add -A .github/workflows
+
+      - name: Take upstream lockfile (regenerated below)
+        run: |
+          if git diff --name-only --diff-filter=U | grep -qx 'package-lock.json'; then
+            git checkout --theirs -- package-lock.json
+            git add package-lock.json
+          fi
+
+      - name: Apply agent resolutions
+        run: |
+          if [ -f scripts/sync/merge_resolutions.py ]; then
+            python3 scripts/sync/merge_resolutions.py
+          else
+            echo "no resolution script yet"
+          fi
+
+      - name: Report remaining conflicts
+        run: python3 scripts/sync/merge_report.py
+
+      - name: Install dependencies and run checks
+        run: |
+          set +e
+          : > CHECKS.md
+          if [ ! -f .merge-clean ]; then
+            echo "Checks skipped: unresolved conflicts remain." >> CHECKS.md
+            exit 0
+          fi
+          run_check() {
+            name="$1"
+            shift
+            "$@" > "/tmp/$name.log" 2>&1
+            code=$?
+            if [ "$code" -eq 0 ]; then
+              echo "- $name: PASS" >> CHECKS.md
+            else
+              echo "- $name: FAIL (exit $code)" >> CHECKS.md
+              {
+                echo
+                echo "<details><summary>$name log tail</summary>"
+                echo
+                echo '```'
+                tail -n 80 "/tmp/$name.log"
+                echo '```'
+                echo
+                echo '</details>'
+                echo
+              } >> CHECKS.md
+            fi
+          }
+          echo "# Check results" > CHECKS.md
+          echo >> CHECKS.md
+          run_check install npm install --no-audit --no-fund
+          run_check lint npm run lint
+          run_check test npm test
+          run_check build npm run build
+          exit 0
+
+      - name: Commit and push the merge result
+        run: |
+          rm -f .merge-clean
+          git add -A
+          git commit --no-verify -m "chore: assisted merge of upstream 2026.08.09.0" || echo "nothing to commit"
+          git push --force origin HEAD:refs/heads/sync/upstream-merged
