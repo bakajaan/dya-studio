@@ -28,6 +28,19 @@ function layerSelects(page: Page): Locator {
   return page.locator('select[aria-label$="default layer"]');
 }
 
+// The tab panel that is currently on screen.
+//
+// TabNavigation renders every VISITED tab with Radix `Tabs.Content forceMount`
+// and hides the inactive ones with `data-[state=inactive]:hidden` (so leaving a
+// tab no longer tears its page down and re-fires its device RPCs). That means
+// generic, layout-level selectors such as `div.glass-card` also match cards in
+// other, still-mounted-but-hidden panels — and `.first()` in DOM order lands on
+// the Home panel, which is hidden, so `toBeVisible()` can never pass. Any such
+// assertion must be scoped to the active panel.
+function activePanel(page: Page): Locator {
+  return page.locator('[role="tabpanel"][data-state="active"]');
+}
+
 test("dya2 Connection tab: reads connection info and round-trips (+reverts) a safe default-layer write", async ({
   page,
 }) => {
@@ -59,8 +72,12 @@ test("dya2 Connection tab: reads connection info and round-trips (+reverts) a sa
 
   // The connections list rendered at least one card (BLE profile and/or USB).
   // ble-management reports the profile rows; assert a Bluetooth "Profile"/OS
-  // card or the USB card is present so the read coverage is explicit.
-  await expect(page.locator("div.glass-card").first()).toBeVisible();
+  // card or the USB card is present so the read coverage is explicit. Scoped to
+  // the active panel — see activePanel() above for why a bare `div.glass-card`
+  // would resolve into the hidden Home panel instead.
+  await expect(activePanel(page).locator("div.glass-card").first()).toBeVisible(
+    { timeout: 120_000 },
+  );
 
   // 2) Pick an ENABLED default-layer <select> that exposes at least two real
   //    layer options (value >= 0), so we have a distinct target to write.
