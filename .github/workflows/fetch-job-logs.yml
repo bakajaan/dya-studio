@@ -1,0 +1,62 @@
+# TEMPORARY diagnostic helper. The e2e (dya2-nonsplit-unlocked) job failed on
+# the upstream sync PR and there is no way to read Actions job logs from the
+# assistant's tooling, so this workflow pulls the log through the API and
+# commits an excerpt to a branch where it can be read as a file. Delete this
+# workflow (and the debug branches) once the failure is understood.
+name: fetch-job-logs
+
+on:
+  push:
+    branches: [debug/e2e-logs]
+
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch the failed e2e job log
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_ID: "93323967500"
+        run: |
+          set -uo pipefail
+          gh api "repos/${{ github.repository }}/actions/jobs/${JOB_ID}/logs" > raw.log || true
+          echo "raw log lines: $(wc -l < raw.log)"
+
+      - name: Summarize the log
+        run: |
+          set -uo pipefail
+          {
+            echo '# e2e (dya2-nonsplit-unlocked) log excerpt'
+            echo
+            echo "total lines: $(wc -l < raw.log)"
+            echo
+            echo '## Playwright result lines'
+            echo '```'
+            grep -nE 'passed|failed|flaky|skipped|Running [0-9]+ test|\[chromium\]|spec\.ts' raw.log | tail -n 120
+            echo '```'
+            echo
+            echo '## Error-ish lines'
+            echo '```'
+            grep -nE 'Error|error:|Timeout|timed out|expect\(|::warning|::error|Test timeout|locator' raw.log | tail -n 200
+            echo '```'
+            echo
+            echo '## Tail'
+            echo '```'
+            tail -n 300 raw.log
+            echo '```'
+          } > E2E_LOG.md
+          wc -c E2E_LOG.md
+
+      - name: Commit the excerpt
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add E2E_LOG.md
+          git commit --no-verify -m "chore: capture failed e2e job log excerpt"
+          git push --force origin HEAD:refs/heads/debug/e2e-logs-out
