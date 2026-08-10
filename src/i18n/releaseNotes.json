@@ -3,6 +3,15 @@
     {
       "version": "upcoming",
       "date": null,
+      "changes": {
+        "major": [],
+        "minor": [],
+        "patch": []
+      }
+    },
+    {
+      "version": "2026.08.09.0",
+      "date": "2026-08-09",
       "summary": {
         "lead": {
           "en": "A big update across the board.",
@@ -25,6 +34,10 @@
       },
       "changes": {
         "major": [
+          {
+            "en": "Version history: each tab now saves what it reads from the keyboard, so you can pick an earlier version from the reset dropdown, review the differences, and write it back.",
+            "ja": "バージョン管理に対応。各タブがキーボードから読み込んだ内容を保存するようになり、リセットのドロップダウンから以前のバージョンを選び、差分を確認して書き戻せます。"
+          },
           {
             "en": "New Connection tab (evolved from the BLE tab) with OS detection and a default-layer selector for supported keyboards.",
             "ja": "接続タブを刷新（旧 BLE タブ）。対応キーボード向けに OS 検出とデフォルトレイヤー選択の UI を追加しました。"
@@ -55,6 +68,10 @@
           {
             "en": "Faster keymap loading via the fast-keymap module with incremental per-layer loading and an official-protocol fallback.",
             "ja": "fast-keymap モジュールによりキーマップ読み込みを高速化。レイヤーごとの逐次読み込みに対応し、非対応時は公式プロトコルにフォールバックします。"
+          },
+          {
+            "en": "New Import/Export tab: sign in to Keyboard Abyss to upload your keymap, or write a saved keymap back to the keyboard after reviewing exactly what changes.",
+            "ja": "インポート／エクスポートタブを追加。Keyboard Abyss にサインインしてキーマップをアップロードしたり、保存済みキーマップの変更内容を確認したうえでキーボードに書き戻せます。"
           }
         ],
         "minor": [
@@ -92,6 +109,10 @@
             "en": "Anonymous usage analytics to help prioritize improvements (no keymap or configuration data is ever sent).",
             "ja": "改善の優先度付けのため匿名の利用状況分析を追加しました（キーマップや設定データは一切送信されません）。",
             "pr": 145
+          },
+          {
+            "en": "Switching tabs no longer discards what a tab was showing: each tab keeps its loaded data and in-progress edits, so returning to it is instant. Keymap, Settings and Trackball gained a Reload button for re-reading from the keyboard on demand.",
+            "ja": "タブを切り替えても、そのタブの読み込み済みデータや編集途中の内容が破棄されなくなりました。戻ったときの再読み込み待ちがなくなります。キーマップ・設定・トラックボールには、必要なときにキーボードから読み直せる再読み込みボタンを追加しました。"
           }
         ],
         "patch": [

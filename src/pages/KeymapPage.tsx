@@ -16,12 +16,12 @@ import {
   IconPlus,
   IconTrash,
   IconRestore,
-  IconHistory,
   IconAlertTriangle,
   IconInfoCircle,
   IconPencil,
   IconLock,
   IconChartBar,
+  IconRefresh,
 } from "@tabler/icons-react";
 import { useStudioLockState } from "@cormoran/zmk-studio-react-hook";
 import * as Tooltip from "@radix-ui/react-tooltip";
@@ -44,6 +44,10 @@ import { getAvailableLayouts, getLayoutLabel } from "../lib/keyboardLayouts";
 import type { BehaviorBinding } from "../hooks/useKeymap";
 import { useStudioUnlock } from "../hooks/useStudioUnlock";
 import { useLanguage } from "../hooks/useLanguage";
+import { ResetVersionMenu } from "../components/versionHistory/ResetVersionMenu";
+import { VersionDiffModal } from "../components/versionHistory/VersionDiffModal";
+import { useKeymapVersionHistory } from "../hooks/versionHistory/useKeymapVersionHistory";
+import { useIsTabActive } from "../hooks/useIsTabActive";
 
 // Persists whether the Keymap tab's insights (heatmap / key usage) sidebar is
 // expanded, so the choice survives a reload.
@@ -65,6 +69,10 @@ export function KeymapPage() {
   // compete with the keymap load. autoLoad:false suppresses the on-mount fetch.
   const runtimeMacro = useRuntimeMacro({ autoLoad: false });
   const inputStream = useInputStream();
+  // Snapshots the keymap into IndexedDB after every full load, and drives the
+  // "restore a previous version" flow behind the reset dropdown.
+  const versionHistory = useKeymapVersionHistory(keymap, t);
+  const isTabActive = useIsTabActive();
   // Proactive lock state: the fast-keymap subsystem is unsecured, so the keymap
   // is viewable while Studio is locked. We use this to (a) show a lock badge in
   // place of Save/Reset and (b) prompt for unlock the moment the user tries to
@@ -193,6 +201,14 @@ export function KeymapPage() {
     } finally {
       setIsSaving(false);
     }
+  }, [keymap]);
+
+  // Re-read the keymap from the keyboard. The page keeps its state across tab
+  // switches now, so this is the way to pick up changes made outside the app
+  // (or to retry after a failed load). Unsaved edits are staged on the device
+  // itself, so a reload shows them again rather than dropping them.
+  const handleReload = useCallback(() => {
+    void keymap.loadKeymapData();
   }, [keymap]);
 
   // Handle discard
@@ -368,6 +384,16 @@ export function KeymapPage() {
       showInsightsPanel ? "1" : "0",
     );
   }, [showInsightsPanel]);
+  // Stream mode highlights (and beeps on) every key press, which only makes
+  // sense while the Keymap tab is on screen. The page stays mounted when you
+  // switch tabs, so turn the stream off on the way out instead of letting it
+  // keep chirping in the background.
+  const { isEnabled: isStreamEnabled, toggleStream } = inputStream;
+  useEffect(() => {
+    if (!isTabActive && isStreamEnabled) {
+      void toggleStream();
+    }
+  }, [isTabActive, isStreamEnabled, toggleStream]);
 
   // Load the runtime-macro list as the FINAL step of the keymap tab load: only
   // after the keymap has fully loaded (preview + background behaviors/layers) so
@@ -436,6 +462,20 @@ export function KeymapPage() {
                   </Switch.Root>
                 </div>
               )}
+              {/* Reading is allowed while locked, so Reload sits outside the
+                  lock branch below. */}
+              <button
+                className="btn-ghost text-sm flex items-center gap-1.5 flex-shrink-0"
+                onClick={handleReload}
+                disabled={keymap.isLoading}
+                title={t("Reload the keymap from the keyboard")}
+              >
+                <IconRefresh
+                  size={16}
+                  className={keymap.isLoading ? "animate-spin" : undefined}
+                />
+                {t("Reload")}
+              </button>
               {/* Insights sidebar toggle: heatmap / key usage next to the
                   keyboard layout, so the user can watch stats while editing. */}
               <button
@@ -471,63 +511,39 @@ export function KeymapPage() {
                 </button>
               ) : (
                 <>
-                  {/* Discard only makes sense with on-memory (unsaved) edits,
-                      so it's hidden entirely when there's nothing to discard. */}
-                  {keymap.hasUnsavedChanges && (
-                    <button
-                      className="btn-ghost text-sm flex items-center gap-1.5 flex-shrink-0"
-                      onClick={handleDiscard}
-                      disabled={isDiscarding || keymap.isLoading}
-                      title={t("Discard unsaved changes and reload the keymap")}
-                    >
-                      {isDiscarding ? (
-                        <IconLoader2 size={16} className="animate-spin" />
-                      ) : (
-                        <IconRestore size={16} />
-                      )}
-                      {t("Discard")}
-                    </button>
-                  )}
-                  <Tooltip.Provider delayDuration={200}>
-                    <Tooltip.Root>
-                      <Tooltip.Trigger asChild>
-                        {/* Wrapper span so the tooltip still shows while the
-                            button is disabled (a disabled button fires no
-                            pointer events). */}
-                        <span className="flex-shrink-0">
-                          <button
-                            className="btn-ghost text-sm flex items-center gap-1.5"
-                            onClick={() => setShowResetDialog(true)}
-                            disabled={
-                              !keymap.isFastKeymapAvailable ||
-                              isResetting ||
-                              keymap.isLoading
-                            }
-                          >
-                            {isResetting ? (
-                              <IconLoader2 size={16} className="animate-spin" />
-                            ) : (
-                              <IconHistory size={16} />
-                            )}
-                            {t("Reset")}
-                          </button>
-                        </span>
-                      </Tooltip.Trigger>
-                      <Tooltip.Portal>
-                        <Tooltip.Content
-                          className="px-3 py-2 rounded bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)] shadow-lg z-50 max-w-xs"
-                          sideOffset={5}
-                        >
-                          {keymap.isFastKeymapAvailable
-                            ? t("Reset the saved keymap to the default keymap")
-                            : t(
-                                'This keyboard cannot reset the keymap on its own. To clear the keymap, use "Reset all settings" in the Settings tab, which restores every setting to its firmware default.',
-                              )}
-                          <Tooltip.Arrow className="fill-[var(--color-surface-elevated)]" />
-                        </Tooltip.Content>
-                      </Tooltip.Portal>
-                    </Tooltip.Root>
-                  </Tooltip.Provider>
+                  {/* Reset, Discard and every captured version live in one
+                      dropdown — see ResetVersionMenu. */}
+                  <div className="flex-shrink-0">
+                    <ResetVersionMenu
+                      versions={versionHistory.versions}
+                      onSelectVersion={versionHistory.selectVersion}
+                      disabled={keymap.isLoading}
+                      isBusy={
+                        isResetting || isDiscarding || versionHistory.isBusy
+                      }
+                      resetToDefault={{
+                        description: keymap.isFastKeymapAvailable
+                          ? t(
+                              "Restores the keyboard's built-in default keymap and writes it to flash immediately.",
+                            )
+                          : t(
+                              'This keyboard cannot reset the keymap on its own. To clear the keymap, use "Reset all settings" in the Settings tab, which restores every setting to its firmware default.',
+                            ),
+                        onSelect: () => setShowResetDialog(true),
+                        disabled:
+                          !keymap.isFastKeymapAvailable ||
+                          isResetting ||
+                          keymap.isLoading,
+                      }}
+                      discard={{
+                        description: t(
+                          "Drops the unsaved edits in keyboard memory and reloads the keymap stored on the keyboard.",
+                        ),
+                        onSelect: () => void handleDiscard(),
+                        disabled: !keymap.hasUnsavedChanges || isDiscarding,
+                      }}
+                    />
+                  </div>
                   <button
                     className="btn-electric text-sm flex items-center gap-1.5"
                     onClick={handleSave}
@@ -1168,6 +1184,12 @@ export function KeymapPage() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      {/* Restore-a-version diff modal (opened from the reset dropdown) */}
+      <VersionDiffModal
+        {...versionHistory.diffModalProps}
+        labeler={versionHistory.labeler}
+      />
 
       {/* Keycode Selector Dialog */}
       <KeycodeSelector
