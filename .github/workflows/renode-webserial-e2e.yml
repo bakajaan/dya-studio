@@ -71,9 +71,8 @@ jobs:
   #              instead of one boot for the whole `specs` set. dya2 (two-machine
   #              wired split) needs this; official does not. See firmware/README
   #              ("Per-boot execution") and tests/dya2/dya2.helpers.ts.
-  #   experimental - true => the e2e job is allowed to fail (continue-on-error).
-  #              In this fork the firmware BUILD is non-gating too; see the
-  #              build-dut job.
+  #   experimental - true => the e2e job is allowed to fail (continue-on-error)
+  #              and is skipped entirely on push/PR.
   # The three DUTs (all STUDIO_LOCKING=n so they boot UNLOCKED -- the tabs need
   # the keymap/subsystems served and there is no RPC unlock plumbing here):
   #   - official-unlocked (gating): the exact zmkfirmware/zmk studio-rpc-usb-uart
@@ -127,7 +126,7 @@ jobs:
             {
               "id": "dya2-unlocked",
               "repo": "cormoran/zmk-keyboard-dya2",
-              "ref": "support-new-zmk-modules",
+              "ref": "main",
               "manifest": "config/west-workspace.yml",
               "keymap_overlay": "",
               "build": "west zmk-build config -af right_trackball_studio_unlocked -d build",
@@ -144,7 +143,7 @@ jobs:
             {
               "id": "dya2-nonsplit-unlocked",
               "repo": "cormoran/zmk-keyboard-dya2",
-              "ref": "support-new-zmk-modules",
+              "ref": "main",
               "manifest": "config/west-workspace.yml",
               "keymap_overlay": "",
               "build": "west zmk-build config -b xiao_ble//zmk -s dya2_right -S studio-rpc-usb-uart right-trackball -a nonsplit --cmake-args \"-DCONFIG_ZMK_STUDIO_LOCKING=n -DEXTRA_DTC_OVERLAY_FILE=$GITHUB_WORKSPACE/_overlay-src/e2e/renode/firmware/dya2_nonsplit.overlay -DEXTRA_CONF_FILE=$GITHUB_WORKSPACE/_overlay-src/e2e/renode/firmware/dya2_nonsplit.conf\" -d build",
@@ -172,13 +171,6 @@ jobs:
     needs: matrix
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Fork deviation: the experimental DUT (dya2-unlocked) builds the
-    # two-machine wired-split image from an external config repo/branch and
-    # fails early in this fork's CI. Its e2e is already non-gating upstream;
-    # keep its firmware build non-gating here too so an unrelated experimental
-    # build cannot block app-side changes. The two gating DUTs
-    # (official-unlocked, dya2-nonsplit-unlocked) are unaffected.
-    continue-on-error: ${{ matrix.dut.experimental }}
     strategy:
       fail-fast: false
       matrix:
